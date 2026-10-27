@@ -44,6 +44,7 @@ class PdfView(ctx: Context) : View(ctx) {
         const val TILE = 512
         const val BASE_MAX_PIXELS = 6_000_000f
         const val TURN_MS = 250L
+        const val DOUBLE_TAP_ZOOM = 2.5f
     }
 
     private enum class Drag { NONE, TURN, VERTICAL, PAN }
@@ -78,17 +79,18 @@ class PdfView(ctx: Context) : View(ctx) {
     private val flingMin = ctx.dp(400f)
 
     /**
-     * Hard flick: fast AND far, judged on two tiers. A casual thumb swipe on a real
-     * phone releases at 2000 to 3000 dp/s, so 2200 fired on ordinary turns. A long
-     * flick needs 3500 dp/s over a quarter of the width; a short snap needs 5000 dp/s
-     * over an eighth. The reach is scaled down near the edge the finger moves
-     * toward, which leaves no room. The platform caps fling speed at 8000 dp/s.
+     * Hard flick: fast AND far, judged on two tiers. Tuned on a real phone to sit
+     * halfway between 1.2.0 (2600 dp/s over 40%, no snap: missed hard flicks) and
+     * 1.3.3 (3500 dp/s over 25%, snap 5000 over 12.5%: fired on swipes). A long
+     * flick needs 3500 dp/s over 32.5% of the width; a short snap needs 6500 dp/s
+     * over 20%. The reach shrinks to at most 75% near the edge the finger moves
+     * toward. The platform caps fling speed at 8000 dp/s.
      */
     var flick = true
     private val flickSpeed = ctx.dp(3500f)
-    private val snapSpeed = ctx.dp(5000f)
-    private val flickReach = 0.25f           // of the view width
-    private val snapReach = 0.125f
+    private val snapSpeed = ctx.dp(6500f)
+    private val flickReach = 0.325f          // of the view width
+    private val snapReach = 0.20f
     private val flickDp = ctx.resources.displayMetrics.density
     private var flipAnim: ValueAnimator? = null
     private var flipTarget = -1
@@ -295,7 +297,7 @@ class PdfView(ctx: Context) : View(ctx) {
         val reach = abs(e2.x - e1.x)
         // Room the finger had: from where it started to the edge it moved toward.
         val room = if (vx < 0) e1.x else width - e1.x
-        val scale = (room / (width * 0.6f)).coerceIn(0.5f, 1f)
+        val scale = (room / (width * 0.6f)).coerceIn(0.75f, 1f)
         val v = abs(vx)
         return (v >= flickSpeed && reach >= width * flickReach * scale) ||
             (v >= snapSpeed && reach >= width * snapReach * scale)
@@ -366,8 +368,8 @@ class PdfView(ctx: Context) : View(ctx) {
                 }
                 drag = when {
                     zoom > 1.01f -> Drag.PAN
-                    // A thumb flick arcs, so sideways wins up to about 59 degrees.
-                    abs(tx) * 1.67f >= abs(ty) -> Drag.TURN
+                    // A thumb flick arcs, so sideways wins up to about 52 degrees.
+                    abs(tx) * 1.28f >= abs(ty) -> Drag.TURN
                     else -> Drag.VERTICAL
                 }
             }
@@ -398,20 +400,15 @@ class PdfView(ctx: Context) : View(ctx) {
             return true
         }
 
-        // At fit a tap acts at once. Zoomed, it waits to see whether it is half of a
-        // double-tap, which zooms out to fit.
-        override fun onSingleTapUp(e: MotionEvent): Boolean {
-            if (zoom <= 1.01f) tap(e)
-            return true
-        }
-
+        // A tap waits out the double-tap window (300 ms): a double-tap zooms in at fit
+        // and out to fit when zoomed.
         override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-            if (zoom > 1.01f) tap(e)
+            tap(e)
             return true
         }
 
         override fun onDoubleTap(e: MotionEvent): Boolean {
-            if (zoom > 1.01f) zoomToFit(e.x, e.y)
+            if (zoom > 1.01f) zoomToFit(e.x, e.y) else zoomInAt(e.x, e.y)
             return true
         }
 
@@ -419,6 +416,37 @@ class PdfView(ctx: Context) : View(ctx) {
             if (drag == Drag.NONE && shift == 0f && !stoppedFlip) listener?.onTap(e.x, e.y)
         }
     })
+
+    /**
+     * Zoom to [DOUBLE_TAP_ZOOM] over 250 ms, ease-out, carrying the tapped point to the
+     * screen centre (as near as the page edges allow).
+     */
+    private fun zoomInAt(fx: Float, fy: Float) {
+        if (fit.isEmpty()) return
+        zoomAnim?.cancel()
+        scroller.forceFinished(true)
+        val cx = fx - left()   // tapped point in page pixels at zoom 1
+        val cy = fy - top()
+        val z0 = zoom
+        scaling = true
+        zoomAnim = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 250
+            interpolator = android.view.animation.PathInterpolator(0f, 0f, 0.2f, 1f)
+            addUpdateListener {
+                val t = it.animatedValue as Float
+                zoom = z0 + (DOUBLE_TAP_ZOOM - z0) * t
+                val px = fx + (width / 2f - fx) * t    // where the point sits on screen now
+                val py = fy + (height / 2f - fy) * t
+                sx = cx / z0 * zoom - px
+                sy = cy / z0 * zoom - py
+                changed()
+            }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(a: android.animation.Animator) { scaling = false; invalidate() }
+            })
+            start()
+        }
+    }
 
     /** Zoom back to fit over 250 ms, ease-out, about the tapped point. */
     private fun zoomToFit(fx: Float, fy: Float) {

@@ -13,6 +13,7 @@ memory `ursapdf.md`.
 ## Icons
 
 - **Every UI icon comes from Tabler Icons; never draw one by hand.** Download the outline SVG at a pinned version and convert it with `python -I tools/svg2vd.py <svg dir> app/src/main/res/drawable name=ic_x`. List new icons in `THIRD_PARTY_NOTICES.md`.
+- **Every third-party asset is credited in the README's Credits section as well as in `THIRD_PARTY_NOTICES.md`:** name, author, licence, link. Check it whenever the README changes.
 
 ## Testing
 

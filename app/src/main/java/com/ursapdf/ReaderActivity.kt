@@ -1,5 +1,6 @@
 package com.ursapdf
 
+import android.animation.ValueAnimator
 import android.app.Activity
 import android.content.Intent
 import android.graphics.RectF
@@ -11,6 +12,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+import android.view.animation.PathInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -34,6 +36,11 @@ class ReaderActivity : Activity(), PdfView.Listener {
     private var eng: PdfEngine? = null
     private var state: DocState? = null
     private var insets = IntArray(4)
+    private lateinit var invertBtn: ImageView
+    private var invertAnim: ValueAnimator? = null
+    private var uiShown = false
+    private val easeOut = PathInterpolator(0f, 0f, 0.58f, 1f)
+    private val easeIn = PathInterpolator(0.42f, 0f, 1f, 1f)
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
@@ -43,6 +50,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
         } catch (_: Exception) {
             // ACTION_VIEW grants are temporary; the file still opens now.
         }
+        Theme.load(this)
         buildUi()
         window.immersive()  // needs the decor view that setContentView creates
 
@@ -71,46 +79,60 @@ class ReaderActivity : Activity(), PdfView.Listener {
             root.addView(it, FrameLayout.LayoutParams(dpi(48), dpi(48), Gravity.CENTER))
         }
 
-        ui = FrameLayout(this).apply { visibility = View.GONE }
+        // The chrome stays laid out; while hidden it sits just off screen, so it never
+        // flashes in place before sliding.
+        ui = FrameLayout(this)
         top = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(PANEL)
+            setBackgroundColor(Theme.panel())
             isClickable = true
         }
         top.addView(ImageView(this).apply {
             setImageResource(R.drawable.ic_back)
+            setColorFilter(Theme.text())
             background = ripple()
             setPadding(dpi(14), dpi(14), dpi(14), dpi(14))
             contentDescription = "Back"
             setOnClickListener { goHome() }
         }, LinearLayout.LayoutParams(dpi(52), dpi(52)))
-        titleView = label("", 16f, 0xFFFFFFFF.toInt()).apply {
+        titleView = label("", 16f, Theme.text()).apply {
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.MIDDLE
         }
         top.addView(titleView, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
-        top.addView(label("View Cropper", 14f, ACCENT, bold = true).apply {
-            setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_crop, 0, 0, 0)
+        top.addView(label("Page Cropper", 14f, Theme.accentInk(), bold = true).apply {
+            setCompoundDrawablesRelativeWithIntrinsicBounds(getDrawable(R.drawable.ic_crop)!!.mutate().apply { setTint(Theme.accentInk()) }, null, null, null)
             compoundDrawablePadding = dpi(6)
             gravity = Gravity.CENTER_VERTICAL
             background = ripple()
-            setPadding(dpi(12), dpi(14), dpi(16), dpi(14))
+            setPadding(dpi(12), dpi(14), dpi(8), dpi(14))
             setOnClickListener { openCropper() }
         }, LinearLayout.LayoutParams(WRAP_CONTENT, dpi(52)))
+        invertBtn = ImageView(this).apply {
+            setImageResource(R.drawable.ic_invert)
+            setColorFilter(Theme.text())
+            background = ripple()
+            setPadding(dpi(15), dpi(15), dpi(15), dpi(15))
+            contentDescription = "Invert Colours"
+            setOnClickListener { toggleInvert() }
+        }
+        top.addView(invertBtn, LinearLayout.LayoutParams(dpi(52), dpi(52)).apply { marginEnd = dpi(4) })
         ui.addView(top, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.TOP))
 
         bottom = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
         }
-        badge = label("", 13f, 0xFFFFFFFF.toInt(), bold = true).apply {
-            background = pill(0xE0000000.toInt(), 14f)
+        badge = label("", 13f, Theme.text(), bold = true).apply {
+            background = pill(Theme.panel(), 14f)
             setPadding(dpi(14), dpi(6), dpi(14), dpi(6))
         }
         bottom.addView(badge, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { bottomMargin = dpi(10) })
         ui.addView(bottom, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.BOTTOM))
         root.addView(ui, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        top.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ -> if (!uiShown) v.translationY = -v.height.toFloat() }
+        bottom.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ -> if (!uiShown) v.translationY = v.height.toFloat() }
 
         root.setOnApplyWindowInsetsListener { _, ins ->
             insets = ins.safe()
@@ -134,12 +156,15 @@ class ReaderActivity : Activity(), PdfView.Listener {
         s.opened = System.currentTimeMillis()
         state = s
         e.crop.set(s.crop)
+        e.invert = if (s.invert) 1f else 0f
+        paintInvertButton()
         titleView.text = s.name
         pdf.setDocument(e, s.page.coerceIn(0, e.pageCount - 1), s.offset, s.x, s.zoom)
 
         val st = ThumbStrip(this, e) { pdf.jumpTo(it) }.apply {
-            setBackgroundColor(PANEL)
+            setBackgroundColor(Theme.panel())
             isClickable = true
+            visibility = View.INVISIBLE
             setPadding(insets[0], 0, insets[2], insets[3])
         }
         strip = st
@@ -167,43 +192,77 @@ class ReaderActivity : Activity(), PdfView.Listener {
 
     override fun onTap(x: Float, y: Float) {
         if (eng == null) return
-        if (ui.visibility == View.VISIBLE) { hideUi(); return }
+        if (uiShown) { hideUi(); return }
         val w = pdf.width; val h = pdf.height
         if (x > w * 0.25f && x < w * 0.75f && y > h * 0.25f && y < h * 0.75f) showUi()
     }
 
-    private fun showUi() {
-        updatePill()
-        ui.alpha = 0f
-        ui.visibility = View.VISIBLE
-        ui.animate().alpha(1f).setDuration(120).start()
-        strip?.post { strip?.centerOn(pdf.currentPage) }
+    override fun onVerticalSwipe() {
+        if (eng == null) return
+        if (uiShown) hideUi() else showUi()
     }
 
+    /** Top bar drops in from above, strip rises from below: 250 ms, ease-out. */
+    private fun showUi() {
+        if (uiShown) return
+        uiShown = true
+        updatePill()
+        strip?.visibility = View.VISIBLE
+        strip?.centerOn(pdf.currentPage)
+        top.animate().translationY(0f).setDuration(250).setInterpolator(easeOut).start()
+        bottom.animate().translationY(0f).setDuration(250).setInterpolator(easeOut).start()
+    }
+
+    /** Both slide back out the way they came: 250 ms, ease-in. */
     private fun hideUi() {
-        ui.animate().alpha(0f).setDuration(120).withEndAction { ui.visibility = View.GONE }.start()
+        if (!uiShown) return
+        uiShown = false
+        top.animate().translationY(-top.height.toFloat()).setDuration(250).setInterpolator(easeIn).start()
+        bottom.animate().translationY(bottom.height.toFloat()).setDuration(250).setInterpolator(easeIn)
+            .withEndAction { if (!uiShown) strip?.visibility = View.INVISIBLE }.start()
         eng?.submit(PdfEngine.Q_THUMB, emptyList())
+    }
+
+    /** Fades the document between normal and inverted over 250 ms. */
+    private fun toggleInvert() {
+        val e = eng ?: return
+        val s = state ?: return
+        s.invert = !s.invert
+        paintInvertButton()
+        invertAnim?.cancel()
+        invertAnim = ValueAnimator.ofFloat(e.invert, if (s.invert) 1f else 0f).apply {
+            duration = 250
+            interpolator = PathInterpolator(0.42f, 0f, 0.58f, 1f)
+            addUpdateListener { eng?.invert = it.animatedValue as Float }
+            start()
+        }
+        save()
+    }
+
+    private fun paintInvertButton() {
+        val on = state?.invert == true
+        invertBtn.setColorFilter(if (on) Theme.accentInk() else Theme.text())
+        invertBtn.isSelected = on
     }
 
     private fun openCropper() {
         val e = eng ?: return
         hideUi()
-        val c = CropOverlay(this, e, pdf.currentPage, insets) { r -> closeCropper(r) }
+        val c = CropOverlay(this, e, pdf.currentPage, insets, pdf.pageRect()) { r -> closeCropper(r) }
         cropper = c
         root.addView(c, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
-        pdf.visibility = View.INVISIBLE
     }
 
     private fun closeCropper(r: RectF?) {
         val e = eng ?: return
-        cropper?.let { root.removeView(it) }
+        val c = cropper ?: return
         cropper = null
-        pdf.visibility = View.VISIBLE
         if (r != null && r != e.crop) {
             e.setCrop(r)
             pdf.onCropChanged()
             save()
         }
+        c.close(pdf.pageRect(), RectF(e.crop)) { root.removeView(c) }
     }
 
     private fun save() {
@@ -228,6 +287,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
 
     override fun onDestroy() {
         super.onDestroy()
+        invertAnim?.cancel()
         eng?.close()
         eng = null
     }

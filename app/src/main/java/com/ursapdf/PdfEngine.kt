@@ -4,6 +4,8 @@ import android.app.ActivityManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.ColorFilter
+import android.graphics.ColorMatrixColorFilter
 import android.graphics.Matrix
 import android.graphics.RectF
 import android.graphics.pdf.PdfRenderer
@@ -114,9 +116,23 @@ class PdfEngine private constructor(private val pfd: ParcelFileDescriptor, priva
     fun submit(q: Int, list: List<Req>) = synchronized(lock) {
         val d = queues[q]
         d.clear()
-        for (r in list) if (r.key !in busy) d.addLast(r)
+        val seen = HashSet<Long>()
+        for (r in list) if (r.key !in busy && seen.add(r.key)) d.addLast(r)
         lock.notify()
     }
+
+    /** Document invert, 0 (normal) to 1 (inverted); bitmaps stay normal, paints apply [filter]. */
+    var invert = 0f
+        set(v) {
+            field = v
+            filter = if (v <= 0f) null else {
+                val a = 1f - 2f * v
+                val o = 255f * v
+                ColorMatrixColorFilter(floatArrayOf(a, 0f, 0f, 0f, o, 0f, a, 0f, 0f, o, 0f, 0f, a, 0f, o, 0f, 0f, 0f, 1f, 0f))
+            }
+            notifyListeners()
+        }
+    var filter: ColorFilter? = null; private set
 
     fun setCrop(r: RectF) {
         crop.set(r)

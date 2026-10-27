@@ -1,5 +1,6 @@
 package com.ursapdf
 
+import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
@@ -8,6 +9,7 @@ import android.graphics.RectF
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.animation.PathInterpolator
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -18,67 +20,128 @@ import kotlin.math.min
 /**
  * Shows one whole page, uncropped and fixed, with a crop frame the user drags by its
  * edges, corners or middle. [onDone] gets the new crop (0..1), or null on cancel.
+ *
+ * Opening and closing take 250 ms: the cropped page starts exactly where the reader
+ * shows it, then zooms out to the whole page while the margins open up. [close] runs
+ * the same move backwards onto the reader's new page rectangle.
  */
 class CropOverlay(
     ctx: Context, private val eng: PdfEngine, private val page: Int,
-    insets: IntArray, private val onDone: (RectF?) -> Unit,
+    insets: IntArray, private val from: RectF, private val onDone: (RectF?) -> Unit,
 ) : FrameLayout(ctx) {
 
     private val crop = RectF(eng.crop)
-    private val canvasView = Sheet(ctx, insets)
+    private val sheet = Sheet(ctx, insets)
+    private val bar: LinearLayout
+    private val hint: TextView
+    private val easeOut = PathInterpolator(0f, 0f, 0.58f, 1f)
+    private val easeIn = PathInterpolator(0.42f, 0f, 1f, 1f)
+    private var anim: ValueAnimator? = null
+    private var closing = false
+
+    /** 0 = page sits on the reader's rectangle, 1 = whole page in the cropper. */
+    private var p = 0f
+        set(v) {
+            field = v
+            bar.alpha = v; hint.alpha = v
+            bar.translationY = (1 - v) * bar.height
+            sheet.invalidate()
+        }
+    private val edge = RectF(from)   // reader rectangle the move starts from or ends on
+    private val edgeCrop = RectF(eng.crop)
 
     init {
-        setBackgroundColor(Color.BLACK)
         isClickable = true
-        addView(canvasView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        addView(sheet, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
 
-        val bar = LinearLayout(ctx).apply {
+        bar = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
             setPadding(ctx.dpi(12), ctx.dpi(10), ctx.dpi(12), ctx.dpi(10) + insets[3])
-            setBackgroundColor(PANEL)
+            setBackgroundColor(Theme.panel())
         }
         fun button(t: String, primary: Boolean, act: () -> Unit) = TextView(ctx).apply {
             text = t
             textSize = 15f
             gravity = Gravity.CENTER
             setTypeface(typeface, android.graphics.Typeface.BOLD)
-            setTextColor(if (primary) BG else Color.WHITE)
-            background = ctx.pill(if (primary) ACCENT else 0xFF333333.toInt(), 22f)
+            setTextColor(if (primary) BG else Theme.text())
+            background = ctx.pill(if (primary) ACCENT else Theme.button(), 22f)
             setPadding(ctx.dpi(20), ctx.dpi(11), ctx.dpi(20), ctx.dpi(11))
-            setOnClickListener { act() }
+            setOnClickListener { if (!closing) act() }
         }
         val lp = { LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = ctx.dpi(6); marginEnd = ctx.dpi(6) } }
-        bar.addView(button("Reset", false) { crop.set(0f, 0f, 1f, 1f); canvasView.invalidate() }, lp())
+        bar.addView(button("Reset", false) { crop.set(0f, 0f, 1f, 1f); sheet.invalidate() }, lp())
         bar.addView(button("Cancel", false) { onDone(null) }, lp())
         bar.addView(button("Apply", true) { onDone(RectF(crop)) }, lp())
         addView(bar, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
 
-        addView(TextView(ctx).apply {
+        hint = TextView(ctx).apply {
             text = "Drag the edges to cut margins. Applies to every page."
             textSize = 13f
-            setTextColor(0xFFBBBBBB.toInt())
+            setTextColor(Theme.sub())
             gravity = Gravity.CENTER
             setPadding(ctx.dpi(16), ctx.dpi(12) + insets[1], ctx.dpi(16), ctx.dpi(8))
-        }, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT, Gravity.TOP))
+        }
+        addView(hint, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT, Gravity.TOP))
+        p = 0f
+    }
+
+    private fun run(to: Float, interp: PathInterpolator, end: (() -> Unit)? = null) {
+        anim?.cancel()
+        anim = ValueAnimator.ofFloat(p, to).apply {
+            duration = 250
+            interpolator = interp
+            addUpdateListener { p = it.animatedValue as Float }
+            if (end != null) addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(a: android.animation.Animator) = end()
+            })
+            start()
+        }
+    }
+
+    /** Zoom back onto [to], the reader's page rectangle under [withCrop], then call [end]. */
+    fun close(to: RectF, withCrop: RectF, end: () -> Unit) {
+        closing = true
+        edge.set(to); edgeCrop.set(withCrop)
+        run(0f, easeIn, end)
+    }
+
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        anim?.cancel()
     }
 
     private inner class Sheet(ctx: Context, private val insets: IntArray) : View(ctx) {
-        private val page = RectF()   // where the whole page sits on screen
+        private val page = RectF()   // where the whole page sits when fully open
+        private val full = RectF()   // whole page at the current step
+        private val clip = RectF()
         private val dim = Paint().apply { color = 0xB0000000.toInt() }
+        private val bg = Paint()
         private val white = Paint().apply { color = Color.WHITE }
         private val bmpPaint = Paint(Paint.FILTER_BITMAP_FLAG)
-        private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = ACCENT; style = Paint.Style.STROKE; strokeWidth = ctx.dp(2f) }
-        private val knob = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = ACCENT }
+        private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Theme.accentInk(); style = Paint.Style.STROKE; strokeWidth = ctx.dp(2f) }
+        private val knob = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Theme.accentInk() }
         private val slop = ctx.dp(28f)
         private val minFrac = 0.1f
+        private var started = false
         private val onRendered: () -> Unit = { invalidate() }
 
         // Which parts the finger moves.
         private var dl = false; private var dt = false; private var dr = false; private var db = false
         private var lastX = 0f; private var lastY = 0f
 
-        init { eng.listeners += onRendered }
+        init {
+            eng.listeners += onRendered
+            // Start without the page if it has not rendered in 150 ms.
+            postDelayed({ begin() }, 150)
+        }
+
+        private fun begin() {
+            if (started || closing) return
+            started = true
+            run(1f, easeOut)
+        }
 
         override fun onDetachedFromWindow() {
             super.onDetachedFromWindow()
@@ -100,24 +163,48 @@ class CropOverlay(
             page.set(left, t, left + pw * s, t + ph * s)
         }
 
+        private fun lerp(a: Float, b: Float) = a + (b - a) * p
+
         override fun onDraw(c: Canvas) {
             if (page.isEmpty) return
             val k = PdfEngine.key(PdfEngine.FULL, this@CropOverlay.page)
             val b = eng.base.get(k)
-            if (b != null) c.drawBitmap(b, null, page, bmpPaint) else {
-                c.drawRect(page, white)
+            if (b == null) {
                 val s = page.width() / eng.pw[this@CropOverlay.page]
                 eng.submit(PdfEngine.Q_URGENT, listOf(eng.req(PdfEngine.FULL, this@CropOverlay.page, 0, 0, 0,
                     ceil(page.width()).toInt(), ceil(page.height()).toInt(), s)))
-            }
-            val l = page.left + crop.left * page.width()
-            val t = page.top + crop.top * page.height()
-            val r = page.left + crop.right * page.width()
-            val bt = page.top + crop.bottom * page.height()
+            } else if (!started) begin()
+
+            bg.color = Theme.bg()
+            bg.alpha = (255 * p).toInt()
+            c.drawRect(0f, 0f, width.toFloat(), height.toFloat(), bg)
+
+            // The whole page whose crop region lands on the reader rectangle at p = 0.
+            val ew = edge.width() / edgeCrop.width()
+            val eh = edge.height() / edgeCrop.height()
+            val el = edge.left - edgeCrop.left * ew
+            val et = edge.top - edgeCrop.top * eh
+            full.set(lerp(el, page.left), lerp(et, page.top), lerp(el + ew, page.right), lerp(et + eh, page.bottom))
+            clip.set(lerp(edge.left, full.left), lerp(edge.top, full.top), lerp(edge.right, full.right), lerp(edge.bottom, full.bottom))
+
+            bmpPaint.colorFilter = eng.filter
+            white.colorFilter = eng.filter
+            c.save()
+            c.clipRect(clip)
+            if (b != null) c.drawBitmap(b, null, full, bmpPaint) else c.drawRect(full, white)
+            c.restore()
+
+            val a = (255 * p).toInt()
+            dim.alpha = (0xB0 * p).toInt(); line.alpha = a; knob.alpha = a
+            val l = full.left + crop.left * full.width()
+            val t = full.top + crop.top * full.height()
+            val r = full.left + crop.right * full.width()
+            val bt = full.top + crop.bottom * full.height()
             // One dim pass outside the frame; four abutting rects leave seams.
             c.save()
+            c.clipRect(clip)
             c.clipOutRect(l, t, r, bt)
-            c.drawRect(page, dim)
+            c.drawRect(full, dim)
             c.restore()
             c.drawRect(l, t, r, bt, line)
             val kw = context.dp(16f); val kh = context.dp(5f)
@@ -131,6 +218,7 @@ class CropOverlay(
         }
 
         override fun onTouchEvent(e: MotionEvent): Boolean {
+            if (closing || p < 1f) return true
             val l = page.left + crop.left * page.width()
             val t = page.top + crop.top * page.height()
             val r = page.left + crop.right * page.width()

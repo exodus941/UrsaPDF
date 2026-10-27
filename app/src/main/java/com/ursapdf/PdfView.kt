@@ -1,5 +1,6 @@
 package com.ursapdf
 
+import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
@@ -9,7 +10,9 @@ import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.View
+import android.view.animation.DecelerateInterpolator
 import android.widget.OverScroller
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.ln
@@ -19,9 +22,11 @@ import kotlin.math.pow
 import kotlin.math.sqrt
 
 /**
- * Continuous vertical page view. At zoom 1 every page fills the view width (after crop).
+ * One page at a time, fitted to the view (after crop). Swipe sideways to turn: the page
+ * follows the finger and the next one slides in beside it. Swipe up or down to call
+ * [Listener.onVerticalSwipe]. Pinch zooms the current page; while zoomed, drags pan.
  *
- * Rendering is two-level: one base bitmap per page at fit width, drawn scaled at any
+ * Rendering is two-level: one base bitmap per page at fit size, drawn scaled at any
  * zoom so a page is never blank, and above zoom 1 a grid of 512 px tiles rendered at
  * the zoom, in quarter-octave steps. Tiles wait until a pinch ends.
  */
@@ -30,38 +35,46 @@ class PdfView(ctx: Context) : View(ctx) {
     interface Listener {
         fun onPageChanged(page: Int)
         fun onTap(x: Float, y: Float)
+        fun onVerticalSwipe()
     }
 
     companion object {
-        const val MIN_ZOOM = 0.5f
         const val MAX_ZOOM = 8f
         const val TILE = 512
         const val BASE_MAX_PIXELS = 6_000_000f
+        const val TURN_MS = 250L
     }
+
+    private enum class Drag { NONE, TURN, VERTICAL, PAN }
 
     var listener: Listener? = null
     private var eng: PdfEngine? = null
 
-    // Layout in doc units: pixels at zoom 1.
-    private var tops = FloatArray(0)
-    private var hs = FloatArray(0)
-    private var fitScale = FloatArray(0)  // px per point at zoom 1
-    private var baseF = FloatArray(0)     // base bitmap size as a fraction of zoom-1 size
-    private var docH = 0f
-    private val gap = ctx.dp(6f)
+    private var fit = FloatArray(0)    // px per point at zoom 1
+    private var dw = FloatArray(0)     // page size at zoom 1
+    private var dh = FloatArray(0)
+    private var baseF = FloatArray(0)  // base bitmap size as a fraction of zoom-1 size
     private var laidW = 0
+    private var laidH = 0
+    private val gap = ctx.dp(16f)
 
-    var zoom = 1f; private set
-    private var sx = 0f
-    private var sy = 0f
     var currentPage = 0; private set
-    private var pending: FloatArray? = null  // page, offset, x, zoom to apply after layout
+    var zoom = 1f; private set
+    private var sx = 0f                // pan of the zoomed page
+    private var sy = 0f
+    private var shift = 0f             // horizontal offset of the current page while turning
+    private var pending: FloatArray? = null  // page, y, x, zoom to apply after layout
 
     private val scroller = OverScroller(ctx)
+    private var turnAnim: ValueAnimator? = null
     private var scaling = false
-    private var stoppedFling = false
+    private var drag = Drag.NONE
+    private var vDist = 0f
+    private var flung = false
     private var lastFx = 0f
     private var lastFy = 0f
+    private val swipeMin = ctx.dp(60f)
+    private val flingMin = ctx.dp(400f)
 
     private val bmpPaint = Paint(Paint.FILTER_BITMAP_FLAG)
     private val white = Paint().apply { color = Color.WHITE }
@@ -69,14 +82,16 @@ class PdfView(ctx: Context) : View(ctx) {
     private val tdst = RectF()
     private val onRendered: () -> Unit = { invalidate() }
 
-    fun setDocument(e: PdfEngine, page: Int, offset: Float, x: Float, z: Float) {
+    private val n get() = eng?.pageCount ?: 0
+
+    fun setDocument(e: PdfEngine, page: Int, y: Float, x: Float, z: Float) {
         eng = e
         e.listeners += onRendered
-        pending = floatArrayOf(page.toFloat(), offset, x, z)
+        pending = floatArrayOf(page.toFloat(), y, x, z)
         relayout()
     }
 
-    /** Crop changed: fit the new width at zoom 1, keep the current page at the top. */
+    /** Crop changed: refit the current page at zoom 1. */
     fun onCropChanged() {
         pending = floatArrayOf(currentPage.toFloat(), 0f, 0f, 1f)
         laidW = 0
@@ -84,107 +99,137 @@ class PdfView(ctx: Context) : View(ctx) {
     }
 
     fun jumpTo(page: Int) {
-        if (tops.isEmpty()) return
-        scroller.forceFinished(true)
-        sy = tops[page.coerceIn(0, tops.size - 1)] * zoom
-        changed()
+        if (n == 0) return
+        turnAnim?.cancel()
+        setPage(page.coerceIn(0, n - 1))
     }
 
-    /** page, offset of screen top within page (0..1), x fraction. */
+    /** Where the current page sits on screen. */
+    fun pageRect() = RectF(left() + shift, top(), left() + shift + pageW(), top() + pageH())
+
+    /** page, pan y fraction, pan x fraction. */
     fun position(): FloatArray {
-        if (tops.isEmpty()) return floatArrayOf(0f, 0f, 0f)
-        val docY = -offY() / zoom
-        val p = pageAt(docY)
-        val off = ((docY - tops[p]) / hs[p]).coerceIn(0f, 1f)
-        val cw = width * zoom
-        return floatArrayOf(p.toFloat(), off, if (cw > width) sx / cw else 0f)
+        val w = pageW(); val h = pageH()
+        return floatArrayOf(currentPage.toFloat(), if (h > height) sy / h else 0f, if (w > width) sx / w else 0f)
     }
 
     override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
-        if (pending == null && tops.isNotEmpty()) {
+        if (pending == null && fit.isNotEmpty()) {
             val p = position()
             pending = floatArrayOf(p[0], p[1], p[2], zoom)
         }
-        if (w != ow) eng?.reset()
+        if (ow != 0) eng?.reset()
         relayout()
     }
 
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
+        turnAnim?.cancel()
         eng?.listeners?.remove(onRendered)
     }
 
     private fun relayout() {
         val e = eng ?: return
-        val w = width
-        if (w <= 0 || height <= 0) return
-        if (w != laidW) {
-            val n = e.pageCount
-            tops = FloatArray(n); hs = FloatArray(n); fitScale = FloatArray(n); baseF = FloatArray(n)
+        val w = width; val h = height
+        if (w <= 0 || h <= 0) return
+        if (w != laidW || h != laidH) {
             val c = e.crop
-            var y = 0f
+            fit = FloatArray(n); dw = FloatArray(n); dh = FloatArray(n); baseF = FloatArray(n)
             for (i in 0 until n) {
-                val s = w / (e.pw[i] * c.width())
-                fitScale[i] = s
-                hs[i] = e.ph[i] * c.height() * s
-                baseF[i] = min(1f, sqrt(BASE_MAX_PIXELS / (w * hs[i])))
-                tops[i] = y
-                y += hs[i] + gap
+                val cw = e.pw[i] * c.width()
+                val ch = e.ph[i] * c.height()
+                val s = min(w / cw, h / ch)
+                fit[i] = s; dw[i] = cw * s; dh[i] = ch * s
+                baseF[i] = min(1f, sqrt(BASE_MAX_PIXELS / (dw[i] * dh[i])))
             }
-            docH = max(0f, y - gap)
-            laidW = w
+            laidW = w; laidH = h
         }
         pending?.let { p ->
             pending = null
-            zoom = p[3].coerceIn(MIN_ZOOM, MAX_ZOOM)
-            val page = p[0].toInt().coerceIn(0, tops.size - 1)
-            sy = (tops[page] + p[1] * hs[page]) * zoom
-            sx = p[2] * width * zoom
+            currentPage = p[0].toInt().coerceIn(0, n - 1)
+            zoom = p[3].coerceIn(1f, MAX_ZOOM)
+            sy = p[1] * pageH()
+            sx = p[2] * pageW()
+            shift = 0f
+            listener?.onPageChanged(currentPage)
         }
         changed()
     }
 
+    private fun pageW() = if (fit.isEmpty()) 0f else dw[currentPage] * zoom
+    private fun pageH() = if (fit.isEmpty()) 0f else dh[currentPage] * zoom
+
     private fun clamp() {
-        val cw = width * zoom
-        val ch = docH * zoom
-        sx = if (cw <= width) 0f else sx.coerceIn(0f, cw - width)
-        sy = if (ch <= height) 0f else sy.coerceIn(0f, ch - height)
+        val w = pageW(); val h = pageH()
+        sx = if (w <= width) 0f else sx.coerceIn(0f, w - width)
+        sy = if (h <= height) 0f else sy.coerceIn(0f, h - height)
     }
 
-    private fun offX(): Float { val cw = width * zoom; return if (cw < width) (width - cw) / 2 else -sx }
-    private fun offY(): Float { val ch = docH * zoom; return if (ch < height) (height - ch) / 2 else -sy }
-
-    /** Last page whose top is at or above [docY]. */
-    private fun pageAt(docY: Float): Int {
-        var lo = 0
-        var hi = tops.size - 1
-        while (lo < hi) {
-            val mid = (lo + hi + 1) ushr 1
-            if (tops[mid] <= docY) lo = mid else hi = mid - 1
-        }
-        return lo
-    }
+    private fun left() = pageW().let { if (it < width) (width - it) / 2 else -sx }
+    private fun top() = pageH().let { if (it < height) (height - it) / 2 else -sy }
 
     private fun changed() {
         clamp()
         invalidate()
-        if (tops.isEmpty()) return
-        val p = pageAt((height / 2f - offY()) / zoom)
+    }
+
+    private fun setPage(p: Int) {
+        shift = 0f; zoom = 1f; sx = 0f; sy = 0f
+        scroller.forceFinished(true)
         if (p != currentPage) {
             currentPage = p
             listener?.onPageChanged(p)
         }
+        changed()
     }
 
     private fun zoomBy(f: Float, fx: Float, fy: Float) {
-        val z2 = (zoom * f).coerceIn(MIN_ZOOM, MAX_ZOOM)
+        val z2 = (zoom * f).coerceIn(1f, MAX_ZOOM)
         val k = z2 / zoom
-        val cx = fx - offX()
-        val cy = fy - offY()
+        val cx = fx - left()
+        val cy = fy - top()
         zoom = z2
         sx = cx * k - fx
         sy = cy * k - fy
         changed()
+    }
+
+    // ---- page turning ----
+
+    private fun finishTurn(v: Float) {
+        val w = width + gap
+        val target = when {
+            (shift < -width * 0.25f || v < -flingMin) && currentPage < n - 1 -> -w
+            (shift > width * 0.25f || v > flingMin) && currentPage > 0 -> w
+            else -> 0f
+        }
+        val ms = (TURN_MS * abs(target - shift) / w).toLong().coerceIn(120L, TURN_MS)
+        turnAnim = ValueAnimator.ofFloat(shift, target).apply {
+            duration = ms
+            interpolator = DecelerateInterpolator()
+            addUpdateListener { shift = it.animatedValue as Float; invalidate() }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                private var cancelled = false
+                override fun onAnimationCancel(a: android.animation.Animator) { cancelled = true }
+                override fun onAnimationEnd(a: android.animation.Animator) {
+                    if (cancelled) return
+                    when {
+                        target < 0 -> setPage(currentPage + 1)
+                        target > 0 -> setPage(currentPage - 1)
+                        else -> { shift = 0f; invalidate() }
+                    }
+                }
+            })
+            start()
+        }
+    }
+
+    /** Finger moves the page; past the first or last page it moves at a third of the speed. */
+    private fun dragTurn(dx: Float) {
+        val next = shift - dx
+        val atEdge = (next > 0 && currentPage == 0) || (next < 0 && currentPage == n - 1)
+        shift = if (atEdge) shift - dx / 3 else next
+        invalidate()
     }
 
     // ---- gestures ----
@@ -193,12 +238,12 @@ class PdfView(ctx: Context) : View(ctx) {
         override fun onScaleBegin(d: ScaleGestureDetector): Boolean {
             scaling = true
             scroller.forceFinished(true)
+            if (shift != 0f) { shift = 0f; drag = Drag.NONE }
             lastFx = d.focusX; lastFy = d.focusY
             return true
         }
 
         override fun onScale(d: ScaleGestureDetector): Boolean {
-            // Pan with the moving focus, then zoom around it.
             sx -= d.focusX - lastFx
             sy -= d.focusY - lastFy
             lastFx = d.focusX; lastFy = d.focusY
@@ -208,44 +253,74 @@ class PdfView(ctx: Context) : View(ctx) {
 
         override fun onScaleEnd(d: ScaleGestureDetector) {
             scaling = false
+            drag = Drag.PAN  // the leftover finger pans; it must not start a turn
             invalidate()
         }
     }).apply { isQuickScaleEnabled = false }
 
     private val gestures = GestureDetector(ctx, object : GestureDetector.SimpleOnGestureListener() {
-        override fun onDown(e: MotionEvent): Boolean {
-            stoppedFling = !scroller.isFinished
-            scroller.forceFinished(true)
-            return true
-        }
+        override fun onDown(e: MotionEvent) = true
 
         override fun onScroll(e1: MotionEvent?, e2: MotionEvent, dx: Float, dy: Float): Boolean {
-            if (!scaling && e2.pointerCount == 1) {
-                sx += dx; sy += dy
-                changed()
+            if (scaling || e2.pointerCount > 1) return true
+            if (drag == Drag.NONE) {
+                val tx = if (e1 != null) e2.x - e1.x else -dx
+                val ty = if (e1 != null) e2.y - e1.y else -dy
+                drag = when {
+                    zoom > 1.01f -> Drag.PAN
+                    abs(tx) >= abs(ty) -> Drag.TURN
+                    else -> Drag.VERTICAL
+                }
+            }
+            when (drag) {
+                Drag.PAN -> { sx += dx; sy += dy; changed() }
+                Drag.TURN -> dragTurn(dx)
+                Drag.VERTICAL -> vDist -= dy
+                Drag.NONE -> {}
             }
             return true
         }
 
         override fun onFling(e1: MotionEvent?, e2: MotionEvent, vx: Float, vy: Float): Boolean {
             if (scaling) return true
-            val maxX = max(0f, width * zoom - width).toInt()
-            val maxY = max(0f, docH * zoom - height).toInt()
-            scroller.fling(sx.toInt(), sy.toInt(), -vx.toInt(), -vy.toInt(), 0, maxX, 0, maxY)
-            postInvalidateOnAnimation()
+            flung = true
+            when (drag) {
+                Drag.TURN -> finishTurn(vx)
+                Drag.VERTICAL -> if (abs(vy) > flingMin || abs(vDist) > swipeMin) listener?.onVerticalSwipe()
+                Drag.PAN -> {
+                    val maxX = max(0f, pageW() - width).toInt()
+                    val maxY = max(0f, pageH() - height).toInt()
+                    scroller.fling(sx.toInt(), sy.toInt(), -vx.toInt(), -vy.toInt(), 0, maxX, 0, maxY)
+                    postInvalidateOnAnimation()
+                }
+                Drag.NONE -> flung = false
+            }
             return true
         }
 
         override fun onSingleTapUp(e: MotionEvent): Boolean {
-            if (!stoppedFling) listener?.onTap(e.x, e.y)
+            if (drag == Drag.NONE && shift == 0f) listener?.onTap(e.x, e.y)
             return true
         }
     })
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        if (e.actionMasked == MotionEvent.ACTION_DOWN) {
+            // A touch during a turn finishes it at once, so the next drag starts clean.
+            turnAnim?.let { if (it.isRunning) it.end() }
+            scroller.forceFinished(true)
+            drag = Drag.NONE; vDist = 0f; flung = false
+        }
         scaleDet.onTouchEvent(e)
         gestures.onTouchEvent(e)
-        if (e.actionMasked == MotionEvent.ACTION_UP && scroller.isFinished) invalidate()
+        if (e.actionMasked == MotionEvent.ACTION_UP || e.actionMasked == MotionEvent.ACTION_CANCEL) {
+            if (!flung) when (drag) {
+                Drag.TURN -> finishTurn(0f)
+                Drag.VERTICAL -> if (abs(vDist) > swipeMin) listener?.onVerticalSwipe()
+                else -> {}
+            }
+            if (scroller.isFinished) invalidate()
+        }
         return true
     }
 
@@ -261,71 +336,70 @@ class PdfView(ctx: Context) : View(ctx) {
     // ---- drawing ----
 
     override fun onDraw(canvas: Canvas) {
-        canvas.drawColor(0xFF2A2A2A.toInt())
+        canvas.drawColor(Theme.backdrop())
         val e = eng ?: return
-        if (tops.isEmpty() || laidW != width) return
-        val w = width.toFloat()
-        val h = height.toFloat()
-        val ox = offX()
-        val oy = offY()
-        val cw = w * zoom
-        val baseLvl = if (zoom < 0.75f) 1 else 0
-        val wantTiles = !scaling && scroller.isFinished && zoom > 1.05f
-        val li = ceil(ln(zoom) / ln(2f) * 4f - 0.01f).toInt().coerceAtLeast(1)
-        val zq = 2f.pow(li / 4f)
-        val k = zoom / zq  // screen px per tile px
+        if (fit.isEmpty() || laidW != width || laidH != height) return
+        bmpPaint.colorFilter = e.filter
+        white.colorFilter = e.filter
+        val want = ArrayList<Req>()
+        val tiles = ArrayList<Req>()
+        val cur = currentPage
 
-        val now = ArrayList<Req>()
-        val tilesWanted = ArrayList<Req>()
-        val first = pageAt(-oy / zoom)
-        var last = first
-        var i = first
-        while (i < tops.size && tops[i] * zoom + oy < h) {
-            dst.set(ox, tops[i] * zoom + oy, ox + cw, (tops[i] + hs[i]) * zoom + oy)
-            val bk = PdfEngine.key(PdfEngine.BASE, i, baseLvl)
-            val b = e.base.get(bk)
-            val shown = b ?: e.base.get(PdfEngine.key(PdfEngine.BASE, i, 1 - baseLvl))
-            if (shown != null) canvas.drawBitmap(shown, null, dst, bmpPaint) else canvas.drawRect(dst, white)
-            if (b == null) now += baseReq(e, i, baseLvl)
+        drawPage(canvas, e, cur, left() + shift, top(), zoom, want, tiles)
+        val step = width + gap
+        if (shift < 0 && cur + 1 < n) drawPage(canvas, e, cur + 1, fitLeft(cur + 1) + shift + step, fitTop(cur + 1), 1f, want, null)
+        if (shift > 0 && cur > 0) drawPage(canvas, e, cur - 1, fitLeft(cur - 1) + shift - step, fitTop(cur - 1), 1f, want, null)
 
-            if (wantTiles) {
-                val vx0 = max(dst.left, 0f) - dst.left
-                val vx1 = min(dst.right, w) - dst.left
-                val vy0 = max(dst.top, 0f) - dst.top
-                val vy1 = min(dst.bottom, h) - dst.top
-                val span = TILE * k
-                val s = fitScale[i] * zq
-                canvas.save()
-                canvas.clipRect(dst)
-                for (ty in floor(vy0 / span).toInt()..floor((vy1 - 0.5f) / span).toInt()) {
-                    for (tx in floor(vx0 / span).toInt()..floor((vx1 - 0.5f) / span).toInt()) {
-                        val tk = PdfEngine.key(PdfEngine.TILE, i, li, tx, ty)
-                        val t = e.tiles.get(tk)
-                        if (t != null) {
-                            tdst.set(dst.left + tx * span, dst.top + ty * span, dst.left + (tx + 1) * span, dst.top + (ty + 1) * span)
-                            canvas.drawBitmap(t, null, tdst, bmpPaint)
-                        } else {
-                            tilesWanted += e.req(PdfEngine.TILE, i, li, tx, ty, TILE, TILE, s, tx * TILE.toFloat(), ty * TILE.toFloat())
-                        }
-                    }
-                }
-                canvas.restore()
-            }
-            last = i
-            i++
+        want += tiles
+        for (p in intArrayOf(cur + 1, cur - 1, cur + 2, cur - 2)) {
+            if (p < 0 || p >= n) continue
+            if (e.base.get(PdfEngine.key(PdfEngine.BASE, p)) == null) want += baseReq(e, p)
         }
-        now += tilesWanted
-        for (p in listOf(last + 1, first - 1, last + 2, first - 2)) {
-            if (p < 0 || p >= tops.size) continue
-            if (e.base.get(PdfEngine.key(PdfEngine.BASE, p, baseLvl)) == null) now += baseReq(e, p, baseLvl)
-        }
-        e.submit(PdfEngine.Q_VIEW, now)
+        e.submit(PdfEngine.Q_VIEW, want)
     }
 
-    private fun baseReq(e: PdfEngine, i: Int, lvl: Int): Req {
-        val f = baseF[i] * (if (lvl == 1) 0.5f else 1f)
-        val bw = ceil(width * f).toInt().coerceAtLeast(1)
-        val bh = ceil(hs[i] * f).toInt().coerceAtLeast(1)
-        return e.req(PdfEngine.BASE, i, lvl, 0, 0, bw, bh, fitScale[i] * f)
+    private fun fitLeft(i: Int) = (width - dw[i]) / 2
+    private fun fitTop(i: Int) = (height - dh[i]) / 2
+
+    private fun drawPage(c: Canvas, e: PdfEngine, i: Int, x: Float, y: Float, z: Float, want: MutableList<Req>, tiles: MutableList<Req>?) {
+        dst.set(x, y, x + dw[i] * z, y + dh[i] * z)
+        val b = e.base.get(PdfEngine.key(PdfEngine.BASE, i))
+        if (b != null) c.drawBitmap(b, null, dst, bmpPaint) else {
+            c.drawRect(dst, white)
+            want += baseReq(e, i)
+        }
+        if (tiles == null || scaling || !scroller.isFinished || shift != 0f || z <= 1.05f) return
+
+        val w = width.toFloat(); val h = height.toFloat()
+        val li = ceil(ln(z) / ln(2f) * 4f - 0.01f).toInt().coerceAtLeast(1)
+        val zq = 2f.pow(li / 4f)
+        val span = TILE * z / zq
+        val s = fit[i] * zq
+        val vx0 = max(dst.left, 0f) - dst.left
+        val vx1 = min(dst.right, w) - dst.left
+        val vy0 = max(dst.top, 0f) - dst.top
+        val vy1 = min(dst.bottom, h) - dst.top
+        c.save()
+        c.clipRect(dst)
+        for (ty in floor(vy0 / span).toInt()..floor((vy1 - 0.5f) / span).toInt()) {
+            for (tx in floor(vx0 / span).toInt()..floor((vx1 - 0.5f) / span).toInt()) {
+                val tk = PdfEngine.key(PdfEngine.TILE, i, li, tx, ty)
+                val t = e.tiles.get(tk)
+                if (t != null) {
+                    tdst.set(dst.left + tx * span, dst.top + ty * span, dst.left + (tx + 1) * span, dst.top + (ty + 1) * span)
+                    c.drawBitmap(t, null, tdst, bmpPaint)
+                } else {
+                    tiles += e.req(PdfEngine.TILE, i, li, tx, ty, TILE, TILE, s, tx * TILE.toFloat(), ty * TILE.toFloat())
+                }
+            }
+        }
+        c.restore()
+    }
+
+    private fun baseReq(e: PdfEngine, i: Int): Req {
+        val f = baseF[i]
+        val bw = ceil(dw[i] * f).toInt().coerceAtLeast(1)
+        val bh = ceil(dh[i] * f).toInt().coerceAtLeast(1)
+        return e.req(PdfEngine.BASE, i, 0, 0, 0, bw, bh, fit[i] * f)
     }
 }

@@ -1,9 +1,12 @@
 package com.ursapdf
 
 import android.content.Context
+import android.content.res.ColorStateList
+import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
 import android.os.Build
-import android.util.TypedValue
 import android.view.View
 import android.view.Window
 import android.view.WindowInsets
@@ -18,11 +21,9 @@ const val PANEL = 0xE0181818.toInt()
 fun Context.dp(v: Float): Float = v * resources.displayMetrics.density
 fun Context.dpi(v: Int): Int = (v * resources.displayMetrics.density + 0.5f).toInt()
 
-fun Context.ripple(): android.graphics.drawable.Drawable? {
-    val tv = TypedValue()
-    theme.resolveAttribute(android.R.attr.selectableItemBackground, tv, true)
-    return getDrawable(tv.resourceId)
-}
+/** Touch ripple in the current theme's ink. Call [android.graphics.drawable.RippleDrawable.setColor] to retint. */
+@Suppress("UnusedReceiverParameter")
+fun Context.ripple() = RippleDrawable(ColorStateList.valueOf(Theme.ripple()), null, ColorDrawable(Color.WHITE))
 
 fun Context.pill(color: Int, radiusDp: Float) = GradientDrawable().apply {
     setColor(color)

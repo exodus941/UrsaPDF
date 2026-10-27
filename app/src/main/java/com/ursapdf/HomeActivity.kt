@@ -2,6 +2,7 @@ package com.ursapdf
 
 import android.app.Activity
 import android.content.Intent
+import android.graphics.drawable.RippleDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.text.TextUtils
@@ -15,32 +16,39 @@ import android.widget.BaseAdapter
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ListView
+import android.widget.PopupWindow
 import android.widget.TextView
 
 class HomeActivity : Activity() {
 
     private val pick = 1
     private var docs: List<DocState> = emptyList()
+    private lateinit var root: LinearLayout
+    private lateinit var title: TextView
+    private lateinit var more: ImageView
     private lateinit var list: ListView
+    private val onTheme: () -> Unit = { applyTheme() }
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
+        Theme.load(this)
         window.edgeToEdge()
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(BG)
-        }
+        root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dpi(20), dpi(16), dpi(8), dpi(8))
+            setPadding(dpi(20), dpi(12), dpi(6), dpi(8))
         }
-        header.addView(label("UrsaPDF", 24f, 0xFFFFFFFF.toInt(), bold = true), LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
-        header.addView(label("Check for Updates", 14f, ACCENT, bold = true).apply {
+        title = label("UrsaPDF", 24f, Theme.text(), bold = true)
+        header.addView(title, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+        more = ImageView(this).apply {
+            setImageResource(R.drawable.ic_more)
             background = ripple()
-            setPadding(dpi(12), dpi(10), dpi(12), dpi(10))
-            setOnClickListener { Updater.check(this@HomeActivity) }
-        })
+            setPadding(dpi(12), dpi(12), dpi(12), dpi(12))
+            contentDescription = "More options"
+            setOnClickListener { showMenu(it) }
+        }
+        header.addView(more, LinearLayout.LayoutParams(dpi(48), dpi(48)))
         root.addView(header)
 
         list = ListView(this).apply {
@@ -61,6 +69,61 @@ class HomeActivity : Activity() {
             ins
         }
         setContentView(root)
+        Theme.listeners += onTheme
+        applyTheme()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        Theme.listeners -= onTheme
+    }
+
+    /** Runs on every frame of a theme change; touches only colours. */
+    private fun applyTheme() {
+        root.setBackgroundColor(Theme.bg())
+        window.decorView.setBackgroundColor(Theme.bg())
+        title.setTextColor(Theme.text())
+        more.setColorFilter(Theme.text())
+        (more.background as? RippleDrawable)?.setColor(android.content.res.ColorStateList.valueOf(Theme.ripple()))
+        for (i in 0 until list.childCount) paintRow(list.getChildAt(i))
+        Theme.applyBars(window)
+    }
+
+    private fun paintRow(v: View) {
+        if (v.tag != "doc") return
+        val row = v as LinearLayout
+        (row.getChildAt(0) as TextView).setTextColor(Theme.text())
+        (row.getChildAt(1) as TextView).setTextColor(Theme.sub())
+        (row.background as? RippleDrawable)?.setColor(android.content.res.ColorStateList.valueOf(Theme.ripple()))
+    }
+
+    private fun showMenu(anchor: View) {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = pill(Theme.popup(), 12f)
+            elevation = dp(8f)
+            setPadding(0, dpi(6), 0, dpi(6))
+        }
+        val pop = PopupWindow(box, WRAP_CONTENT, WRAP_CONTENT, true).apply {
+            elevation = dp(8f)
+            setBackgroundDrawable(null)
+        }
+        fun item(icon: Int, text: String, tint: Int, act: () -> Unit) {
+            box.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = ripple()
+                setPadding(dpi(16), dpi(12), dpi(24), dpi(12))
+                addView(ImageView(context).apply { setImageResource(icon); setColorFilter(tint) }, LinearLayout.LayoutParams(dpi(22), dpi(22)))
+                addView(label(text, 15f, Theme.text()).apply { setPadding(dpi(16), 0, 0, 0) })
+                setOnClickListener { pop.dismiss(); act() }
+            }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        }
+        if (Theme.light) item(R.drawable.ic_bulb_off, "Toggle Dark Mode", Theme.text()) { Theme.toggle(this) }
+        else item(R.drawable.ic_bulb_on, "Toggle Light Mode", ACCENT) { Theme.toggle(this) }
+        item(R.drawable.ic_refresh, "Check for Updates", Theme.text()) { Updater.check(this) }
+        val at = IntArray(2).also { anchor.getLocationInWindow(it) }
+        pop.showAtLocation(root, Gravity.TOP or Gravity.END, dpi(12), at[1])
     }
 
     override fun onResume() {
@@ -113,6 +176,7 @@ class HomeActivity : Activity() {
                 else DateUtils.getRelativeTimeSpanString(d.opened, now, DateUtils.MINUTE_IN_MILLIS)
             (row.getChildAt(1) as TextView).text =
                 if (d.pages > 0) "Page ${d.page + 1} of ${d.pages}  ·  $ago" else "$ago"
+            paintRow(row)
             return row
         }
 
@@ -132,14 +196,15 @@ class HomeActivity : Activity() {
         }
 
         private fun docRow() = LinearLayout(this@HomeActivity).apply {
+            tag = "doc"
             orientation = LinearLayout.VERTICAL
             background = ripple()
             setPadding(dpi(20), dpi(12), dpi(20), dpi(12))
-            addView(label("", 16f, 0xFFFFFFFF.toInt()).apply {
+            addView(label("", 16f, Theme.text()).apply {
                 maxLines = 1
                 ellipsize = TextUtils.TruncateAt.MIDDLE
             })
-            addView(label("", 13f, 0xFF999999.toInt()).apply { setPadding(0, dpi(2), 0, 0) })
+            addView(label("", 13f, Theme.sub()).apply { setPadding(0, dpi(2), 0, 0) })
         }
     }
 }

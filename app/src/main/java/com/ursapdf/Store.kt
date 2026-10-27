@@ -11,6 +11,7 @@ class DocState(val uri: String, var name: String) {
     var offset = 0f   // fraction of the page above the screen top
     var x = 0f        // horizontal scroll as a fraction of content width
     var zoom = 1f
+    var invert = false
     var pages = 0
     val crop = RectF(0f, 0f, 1f, 1f)
     var opened = 0L
@@ -31,6 +32,7 @@ object Store {
                 offset = j.optDouble("o", 0.0).toFloat()
                 x = j.optDouble("x", 0.0).toFloat()
                 zoom = j.optDouble("z", 1.0).toFloat()
+                invert = j.optBoolean("i", false)
                 pages = j.optInt("c")
                 crop.set(
                     j.optDouble("l", 0.0).toFloat(), j.optDouble("t", 0.0).toFloat(),
@@ -60,7 +62,7 @@ object Store {
         for (d in list) arr.put(JSONObject().apply {
             put("u", d.uri); put("n", d.name); put("p", d.page)
             put("o", d.offset.toDouble()); put("x", d.x.toDouble()); put("z", d.zoom.toDouble())
-            put("c", d.pages)
+            put("c", d.pages); put("i", d.invert)
             put("l", d.crop.left.toDouble()); put("t", d.crop.top.toDouble())
             put("r", d.crop.right.toDouble()); put("b", d.crop.bottom.toDouble())
             put("ts", d.opened)

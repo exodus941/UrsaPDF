@@ -31,12 +31,12 @@ class ThumbStrip(ctx: Context, private val eng: PdfEngine, private val onPick: (
     private val bmpPaint = Paint(Paint.FILTER_BITMAP_FLAG)
     private val white = Paint().apply { color = Color.WHITE }
     private val frame = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = ACCENT; style = Paint.Style.STROKE; strokeWidth = ctx.dp(2.5f)
+        color = Theme.accentInk(); style = Paint.Style.STROKE; strokeWidth = ctx.dp(2.5f)
     }
     private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0xFFBBBBBB.toInt(); textSize = ctx.dp(11f); textAlign = Paint.Align.CENTER
+        color = Theme.sub(); textSize = ctx.dp(11f); textAlign = Paint.Align.CENTER
     }
-    private val textOn = Paint(text).apply { color = ACCENT; isFakeBoldText = true }
+    private val textOn = Paint(text).apply { color = Theme.accentInk(); isFakeBoldText = true }
     private val r = RectF()
     private val onRendered: () -> Unit = { invalidate() }
 
@@ -98,6 +98,8 @@ class ThumbStrip(ctx: Context, private val eng: PdfEngine, private val onPick: (
 
     override fun onDraw(canvas: Canvas) {
         val n = eng.pageCount
+        bmpPaint.colorFilter = eng.filter
+        white.colorFilter = eng.filter
         val first = max(0, ((sx - pad) / item).toInt())
         val last = min(n - 1, ((sx + width - pad) / item).toInt())
         val hh = height - paddingBottom

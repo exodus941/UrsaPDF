@@ -46,7 +46,7 @@ object Updater {
                 result.onFailure { Toast.makeText(a, "Update check failed: ${it.message}", Toast.LENGTH_LONG).show() }
                 result.onSuccess { (tag, url) ->
                     val newer = newer(tag, BuildConfig.VERSION_NAME)
-                    AlertDialog.Builder(a)
+                    AlertDialog.Builder(a, Theme.dialogTheme())
                         .setTitle(if (newer) "Update available" else "Up to date")
                         .setMessage(if (newer) "UrsaPDF $tag is available. You have ${BuildConfig.VERSION_NAME}."
                             else "You have the latest version (${BuildConfig.VERSION_NAME}).")
@@ -74,7 +74,7 @@ object Updater {
             max = 100
             setPadding(a.dpi(24), a.dpi(16), a.dpi(24), a.dpi(8))
         }
-        val dlg = AlertDialog.Builder(a).setTitle("Downloading UrsaPDF").setView(bar).setCancelable(false).show()
+        val dlg = AlertDialog.Builder(a, Theme.dialogTheme()).setTitle("Downloading UrsaPDF").setView(bar).setCancelable(false).show()
         Thread {
             val ok = try {
                 val f = apkFile(a)

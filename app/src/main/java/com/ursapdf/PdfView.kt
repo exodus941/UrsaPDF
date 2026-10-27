@@ -79,9 +79,10 @@ class PdfView(ctx: Context) : View(ctx) {
     private val flingMin = ctx.dp(400f)
 
     /**
-     * Hard flick: fast AND far. The user judged 1.2.0's rule right after trying
-     * three stricter and looser ones: 16.25 in/s (2600 dp/s at the default display
-     * size) over 40% of the width. 1.2.0 missed flicks started at a side edge, but
+     * Hard flick: fast AND far. The user judged 1.2.0's rule nearly right after
+     * trying three stricter and looser ones (16.25 in/s, 2600 dp/s at the default
+     * display size, over 40% of the width), then asked for it a bit stiffer: 19.5
+     * in/s, 20% faster, same reach. 1.2.0 missed flicks started at a side edge, but
      * the system Back gesture took those, fixed by the exclusion band below.
      *
      * Speed is in physical inches, from the panel's real pixel density (xdpi), so
@@ -92,13 +93,19 @@ class PdfView(ctx: Context) : View(ctx) {
     private val pxPerInch = ctx.resources.displayMetrics.let { m ->
         m.xdpi.takeIf { it in 100f..1000f } ?: m.densityDpi.toFloat()  // some phones misreport xdpi
     }
-    private val flickInches = 16.25f         // per second
+    private val flickInches = 19.5f          // per second
     private val flickReach = 0.40f           // of the view width
     private var flipAnim: ValueAnimator? = null
     private var flipTarget = -1
     private var zoomAnim: ValueAnimator? = null
     private var edgeDir = 0                  // +1 next, -1 previous: a push past a zoomed page's edge
     private var dragZoomed = false           // this touch zoomed by pinch or quick scale
+    private var qsX = 0f                     // quick scale: anchor, start zoom, active
+    private var qsY = 0f
+    private var qsZoom = 1f
+    private var qsActive = false
+    private val quickSpan = ctx.dp(90f)      // drag per doubling or halving
+    private val touchSlop = android.view.ViewConfiguration.get(ctx).scaledTouchSlop.toFloat()
     private var downX = 0f
     private var downAtRight = false
     private var downAtLeft = false
@@ -346,9 +353,9 @@ class PdfView(ctx: Context) : View(ctx) {
             drag = Drag.PAN  // the leftover finger pans; it must not start a turn
             invalidate()
         }
-    // Quick scale: double-tap, hold, and drag down to zoom in or up to zoom out,
-    // about the tapped point.
-    }).apply { isQuickScaleEnabled = true }
+    // Quick scale is ours (see onDoubleTapEvent): the platform's zooms in on a drag
+    // down and cannot be made faster.
+    }).apply { isQuickScaleEnabled = false }
 
     private val gestures = GestureDetector(ctx, object : GestureDetector.SimpleOnGestureListener() {
         override fun onDown(e: MotionEvent) = true
@@ -411,9 +418,37 @@ class PdfView(ctx: Context) : View(ctx) {
 
         override fun onDoubleTap(e: MotionEvent) = true
 
+        /**
+         * The second tap of a double-tap. Held and dragged, it zooms about the tapped
+         * point: up zooms in, down zooms out, doubling or halving every 90 dp. Lifted
+         * without a drag, it toggles between fit and 2.5x.
+         */
         override fun onDoubleTapEvent(e: MotionEvent): Boolean {
-            if (e.actionMasked == MotionEvent.ACTION_UP && !dragZoomed) {
-                if (zoom > 1.01f) zoomToFit(e.x, e.y) else zoomInAt(e.x, e.y)
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    qsX = e.x; qsY = e.y; qsZoom = zoom; qsActive = false
+                    zoomAnim?.cancel()
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dy = e.y - qsY
+                    if (!qsActive && abs(dy) > touchSlop) {
+                        qsActive = true; scaling = true
+                        scroller.forceFinished(true)
+                    }
+                    if (qsActive) {
+                        val target = (qsZoom * 2f.pow(-dy / quickSpan)).coerceIn(1f, MAX_ZOOM)
+                        zoomBy(target / zoom, qsX, qsY)
+                    }
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (qsActive) {
+                        qsActive = false; scaling = false; dragZoomed = true
+                        drag = Drag.PAN
+                        invalidate()
+                    } else if (e.actionMasked == MotionEvent.ACTION_UP && !dragZoomed) {
+                        if (zoom > 1.01f) zoomToFit(e.x, e.y) else zoomInAt(e.x, e.y)
+                    }
+                }
             }
             return true
         }
@@ -421,7 +456,9 @@ class PdfView(ctx: Context) : View(ctx) {
         private fun tap(e: MotionEvent) {
             if (drag == Drag.NONE && shift == 0f && !stoppedFlip) listener?.onTap(e.x, e.y)
         }
-    })
+    // No long-press action exists, and a detected long press drops every later move:
+    // a held quick-scale drag froze after 400 ms.
+    }).apply { setIsLongpressEnabled(false) }
 
     /**
      * Zoom to [DOUBLE_TAP_ZOOM] over 250 ms, ease-out, carrying the tapped point to the

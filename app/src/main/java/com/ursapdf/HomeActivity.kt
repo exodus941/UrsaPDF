@@ -37,7 +37,7 @@ class HomeActivity : Activity() {
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dpi(20), dpi(12), dpi(6), dpi(8))
+            setPadding(dpi(20), dpi(12), dpi(8), dpi(8))
         }
         title = label("UrsaPDF", 24f, Theme.text(), bold = true)
         header.addView(title, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
@@ -102,7 +102,7 @@ class HomeActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             background = pill(Theme.popup(), 12f)
             elevation = dp(8f)
-            setPadding(0, dpi(6), 0, dpi(6))
+            setPadding(0, dpi(8), 0, dpi(8))
         }
         val pop = PopupWindow(box, WRAP_CONTENT, WRAP_CONTENT, true).apply {
             elevation = dp(8f)
@@ -183,12 +183,12 @@ class HomeActivity : Activity() {
         private fun openRow(): View = LinearLayout(this@HomeActivity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dpi(16), dpi(14), dpi(16), dpi(14))
+            setPadding(dpi(16), dpi(12), dpi(16), dpi(12))
             val inner = LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 background = pill(ACCENT, 14f)
-                setPadding(dpi(16), dpi(14), dpi(16), dpi(14))
+                setPadding(dpi(16), dpi(16), dpi(16), dpi(16))
                 addView(ImageView(context).apply { setImageResource(R.drawable.ic_add) })
                 addView(label("Open a PDF", 16f, BG, bold = true).apply { setPadding(dpi(12), 0, 0, 0) })
             }

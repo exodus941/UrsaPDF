@@ -34,7 +34,7 @@ class CropOverlay(
     private val sheet = Sheet(ctx, insets)
     private val bar: LinearLayout
     private val hint: TextView
-    private val easeOut = PathInterpolator(0f, 0f, 0.58f, 1f)
+    private val easeOut = PathInterpolator(0f, 0f, 0.2f, 1f)
     private val easeIn = PathInterpolator(0.42f, 0f, 1f, 1f)
     private var anim: ValueAnimator? = null
     private var closing = false
@@ -57,7 +57,7 @@ class CropOverlay(
         bar = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            setPadding(ctx.dpi(12), ctx.dpi(10), ctx.dpi(12), ctx.dpi(10) + insets[3])
+            setPadding(ctx.dpi(12), ctx.dpi(12), ctx.dpi(12), ctx.dpi(12) + insets[3])
             setBackgroundColor(Theme.panel())
         }
         fun button(t: String, primary: Boolean, act: () -> Unit) = TextView(ctx).apply {
@@ -67,10 +67,10 @@ class CropOverlay(
             setTypeface(typeface, android.graphics.Typeface.BOLD)
             setTextColor(if (primary) BG else Theme.text())
             background = ctx.pill(if (primary) ACCENT else Theme.button(), 22f)
-            setPadding(ctx.dpi(20), ctx.dpi(11), ctx.dpi(20), ctx.dpi(11))
+            setPadding(ctx.dpi(20), ctx.dpi(12), ctx.dpi(20), ctx.dpi(12))
             setOnClickListener { if (!closing) act() }
         }
-        val lp = { LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = ctx.dpi(6); marginEnd = ctx.dpi(6) } }
+        val lp = { LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = ctx.dpi(4); marginEnd = ctx.dpi(4) } }
         bar.addView(button("Reset", false) { crop.set(0f, 0f, 1f, 1f); sheet.invalidate() }, lp())
         bar.addView(button("Cancel", false) { onDone(null) }, lp())
         bar.addView(button("Apply", true) { onDone(RectF(crop)) }, lp())

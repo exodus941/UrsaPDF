@@ -39,7 +39,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
     private lateinit var invertBtn: ImageView
     private var invertAnim: ValueAnimator? = null
     private var uiShown = false
-    private val easeOut = PathInterpolator(0f, 0f, 0.58f, 1f)
+    private val easeOut = PathInterpolator(0f, 0f, 0.2f, 1f)
     private val easeIn = PathInterpolator(0.42f, 0f, 1f, 1f)
 
     override fun onCreate(b: Bundle?) {
@@ -92,10 +92,10 @@ class ReaderActivity : Activity(), PdfView.Listener {
             setImageResource(R.drawable.ic_back)
             setColorFilter(Theme.text())
             background = ripple()
-            setPadding(dpi(14), dpi(14), dpi(14), dpi(14))
+            setPadding(dpi(12), dpi(12), dpi(12), dpi(12))
             contentDescription = "Back"
             setOnClickListener { goHome() }
-        }, LinearLayout.LayoutParams(dpi(52), dpi(52)))
+        }, LinearLayout.LayoutParams(dpi(48), dpi(48)))
         titleView = label("", 16f, Theme.text()).apply {
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.MIDDLE
@@ -103,21 +103,21 @@ class ReaderActivity : Activity(), PdfView.Listener {
         top.addView(titleView, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
         top.addView(label("Page Cropper", 14f, Theme.accentInk(), bold = true).apply {
             setCompoundDrawablesRelativeWithIntrinsicBounds(getDrawable(R.drawable.ic_crop)!!.mutate().apply { setTint(Theme.accentInk()) }, null, null, null)
-            compoundDrawablePadding = dpi(6)
+            compoundDrawablePadding = dpi(8)
             gravity = Gravity.CENTER_VERTICAL
             background = ripple()
-            setPadding(dpi(12), dpi(14), dpi(8), dpi(14))
+            setPadding(dpi(12), dpi(12), dpi(8), dpi(12))
             setOnClickListener { openCropper() }
-        }, LinearLayout.LayoutParams(WRAP_CONTENT, dpi(52)))
+        }, LinearLayout.LayoutParams(WRAP_CONTENT, dpi(48)))
         invertBtn = ImageView(this).apply {
             setImageResource(R.drawable.ic_invert)
             setColorFilter(Theme.text())
             background = ripple()
-            setPadding(dpi(15), dpi(15), dpi(15), dpi(15))
+            setPadding(dpi(12), dpi(12), dpi(12), dpi(12))
             contentDescription = "Invert Colours"
             setOnClickListener { toggleInvert() }
         }
-        top.addView(invertBtn, LinearLayout.LayoutParams(dpi(52), dpi(52)).apply { marginEnd = dpi(4) })
+        top.addView(invertBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)).apply { marginEnd = dpi(4) })
         ui.addView(top, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.TOP))
 
         bottom = LinearLayout(this).apply {
@@ -126,9 +126,9 @@ class ReaderActivity : Activity(), PdfView.Listener {
         }
         badge = label("", 13f, Theme.text(), bold = true).apply {
             background = pill(Theme.panel(), 14f)
-            setPadding(dpi(14), dpi(6), dpi(14), dpi(6))
+            setPadding(dpi(16), dpi(8), dpi(16), dpi(8))
         }
-        bottom.addView(badge, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { bottomMargin = dpi(10) })
+        bottom.addView(badge, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { bottomMargin = dpi(12) })
         ui.addView(bottom, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.BOTTOM))
         root.addView(ui, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         top.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ -> if (!uiShown) v.translationY = -v.height.toFloat() }

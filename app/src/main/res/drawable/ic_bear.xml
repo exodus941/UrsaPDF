@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Bear head on a page: ears, head, snout. Inside the 66dp safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FF121212"
+        android:pathData="M30,40a9,9 0 1,0 18,0a9,9 0 1,0 -18,0z M60,40a9,9 0 1,0 18,0a9,9 0 1,0 -18,0z M32,58a22,21 0 1,0 44,0a22,21 0 1,0 -44,0z" />
+    <path
+        android:fillColor="#FFFFB300"
+        android:pathData="M44,64a10,8 0 1,0 20,0a10,8 0 1,0 -20,0z M43,52a3,3 0 1,0 6,0a3,3 0 1,0 -6,0z M59,52a3,3 0 1,0 6,0a3,3 0 1,0 -6,0z" />
+    <path
+        android:fillColor="#FF121212"
+        android:pathData="M50,62a4,3 0 1,0 8,0a4,3 0 1,0 -8,0z" />
+</vector>

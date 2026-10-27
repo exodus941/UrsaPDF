@@ -1,0 +1,36 @@
+name: Release APK
+
+# Push a tag like v1.0.1; this builds a signed APK and attaches it to a GitHub release.
+# The app's Check for Updates reads the latest release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: android-actions/setup-android@v3
+      - name: Build
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+          URSA_KS_PASS: ${{ secrets.URSA_KS_PASS }}
+        run: |
+          echo "$KEYSTORE_B64" | base64 -d > ursapdf.keystore
+          export URSA_KS_PATH=ursapdf.keystore
+          V="${GITHUB_REF_NAME#v}"
+          chmod +x gradlew
+          ./gradlew assembleRelease -PversionName="$V" --no-daemon
+          cp app/build/outputs/apk/release/app-release.apk "UrsaPDF-$V.apk"
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" UrsaPDF-*.apk --title "UrsaPDF ${GITHUB_REF_NAME}" --generate-notes

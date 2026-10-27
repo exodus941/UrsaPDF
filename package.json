@@ -1,0 +1,7 @@
+{
+  "name": "ursapdf",
+  "private": true,
+  "scripts": {
+    "check": "node tools/syntax-guard.mjs"
+  }
+}

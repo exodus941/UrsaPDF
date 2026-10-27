@@ -213,7 +213,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
     override fun onPageChanged(page: Int) = updatePill()
 
     /**
-     * After a swipe or flick: fade the page pill in (250 ms), hold 1.25 s, fade out
+     * After a swipe or flick: fade the page pill in (250 ms), hold 0.625 s, fade out
      * (250 ms). A flick turns pages faster than that, so each turn restarts the hold.
      * The chrome already shows the same pill, so nothing flashes while it is up.
      */
@@ -224,7 +224,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
         flash.removeCallbacks(hideFlash)
         flash.animate().cancel()
         flash.animate().alpha(1f).setDuration((250 * (1 - flash.alpha)).toLong()).setInterpolator(easeOut).start()
-        flash.postDelayed(hideFlash, 250L + 1250L)
+        flash.postDelayed(hideFlash, 250L + 625L)
     }
 
     private val hideFlash = Runnable {

@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Bear head, and under it a box reading PDF in Five by Five by jeti (CC BY 4.0),
-     the product mark for this Ursa app. Bear: 74.3% scale, top at y 24, head ends at
-     y 59.7. Box: y 66.0 to 80.7, so 6.3 units clear of the head. Text padding is 4.2
-     sideways and 2.6 up and down, which reads as even. Farthest points sit 32.7 from
-     the centre, inside the 33-unit safe circle. -->
+     the product mark for this Ursa app. Bear: 74.3% scale, top at y 25.2, head ends
+     at y 60.8. Box: y 64.8 to 79.5, so 4.0 units clear of the head. Text padding is
+     4.2 sideways and 2.6 up and down, which reads as even. Farthest points sit 31.8
+     from the centre, inside the 33-unit safe circle. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
@@ -14,7 +14,7 @@
         android:pivotY="31"
         android:scaleX="0.7434"
         android:scaleY="0.7434"
-        android:translateY="-7">
+        android:translateY="-5.85">
         <path
             android:fillColor="#FF121212"
             android:pathData="M30,40a9,9 0 1,0 18,0a9,9 0 1,0 -18,0z M60,40a9,9 0 1,0 18,0a9,9 0 1,0 -18,0z M32,58a22,21 0 1,0 44,0a22,21 0 1,0 -44,0z" />
@@ -28,9 +28,9 @@
     <!-- Box 40.5 x 14.7 with a 2-unit corner. -->
     <path
         android:fillColor="#FF121212"
-        android:pathData="M35.73,65.98h36.53a2.0,2.0 0 0 1 2.0,2.0v10.70a2.0,2.0 0 0 1 -2.0,2.0h-36.53a2.0,2.0 0 0 1 -2.0,-2.0v-10.70a2.0,2.0 0 0 1 2.0,-2.0z" />
+        android:pathData="M35.73,64.83h36.53a2.0,2.0 0 0 1 2.0,2.0v10.70a2.0,2.0 0 0 1 -2.0,2.0h-36.53a2.0,2.0 0 0 1 -2.0,-2.0v-10.70a2.0,2.0 0 0 1 2.0,-2.0z" />
     <!-- P D F, 5 x 5 cells of 1.89, one cell apart. -->
     <path
         android:fillColor="#FFFFB300"
-        android:pathData="M37.94,68.61h7.56v1.89h-7.56zM37.94,70.50h1.89v1.89h-1.89zM45.50,70.50h1.89v1.89h-1.89zM37.94,72.39h7.56v1.89h-7.56zM37.94,74.28h1.89v1.89h-1.89zM37.94,76.17h1.89v1.89h-1.89zM49.28,68.61h7.56v1.89h-7.56zM49.28,70.50h1.89v1.89h-1.89zM56.84,70.50h1.89v1.89h-1.89zM49.28,72.39h1.89v1.89h-1.89zM56.84,72.39h1.89v1.89h-1.89zM49.28,74.28h1.89v1.89h-1.89zM56.84,74.28h1.89v1.89h-1.89zM49.28,76.17h7.56v1.89h-7.56zM60.62,68.61h9.45v1.89h-9.45zM60.62,70.50h1.89v1.89h-1.89zM60.62,72.39h7.56v1.89h-7.56zM60.62,74.28h1.89v1.89h-1.89zM60.62,76.17h1.89v1.89h-1.89z" />
+        android:pathData="M37.94,67.45h7.56v1.89h-7.56zM37.94,69.34h1.89v1.89h-1.89zM45.50,69.34h1.89v1.89h-1.89zM37.94,71.23h7.56v1.89h-7.56zM37.94,73.12h1.89v1.89h-1.89zM37.94,75.02h1.89v1.89h-1.89zM49.28,67.45h7.56v1.89h-7.56zM49.28,69.34h1.89v1.89h-1.89zM56.84,69.34h1.89v1.89h-1.89zM49.28,71.23h1.89v1.89h-1.89zM56.84,71.23h1.89v1.89h-1.89zM49.28,73.12h1.89v1.89h-1.89zM56.84,73.12h1.89v1.89h-1.89zM49.28,75.02h7.56v1.89h-7.56zM60.62,67.45h9.45v1.89h-9.45zM60.62,69.34h1.89v1.89h-1.89zM60.62,71.23h7.56v1.89h-7.56zM60.62,73.12h1.89v1.89h-1.89zM60.62,75.02h1.89v1.89h-1.89z" />
 </vector>

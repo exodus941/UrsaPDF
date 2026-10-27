@@ -16,7 +16,6 @@ import android.widget.BaseAdapter
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ListView
-import android.widget.PopupWindow
 import android.widget.TextView
 
 class HomeActivity : Activity() {
@@ -25,7 +24,8 @@ class HomeActivity : Activity() {
     private var docs: List<DocState> = emptyList()
     private lateinit var root: LinearLayout
     private lateinit var title: TextView
-    private lateinit var more: ImageView
+    private lateinit var themeBtn: ImageView
+    private lateinit var updateBtn: ImageView
     private lateinit var list: ListView
     private val onTheme: () -> Unit = { applyTheme() }
 
@@ -41,14 +41,18 @@ class HomeActivity : Activity() {
         }
         title = label("UrsaPDF", 24f, Theme.text(), bold = true)
         header.addView(title, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
-        more = ImageView(this).apply {
-            setImageResource(R.drawable.ic_more)
+        // Theme and update buttons, the same 48 dp icon squares as the reader's top bar.
+        fun iconButton(icon: Int, name: String, act: () -> Unit) = ImageView(this).apply {
+            setImageResource(icon)
             background = ripple()
             setPadding(dpi(12), dpi(12), dpi(12), dpi(12))
-            contentDescription = "More options"
-            setOnClickListener { showMenu(it) }
+            contentDescription = name
+            setOnClickListener { act() }
         }
-        header.addView(more, LinearLayout.LayoutParams(dpi(48), dpi(48)))
+        themeBtn = iconButton(R.drawable.ic_bulb_on, "Toggle Light Mode") { Theme.toggle(this) }
+        header.addView(themeBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)))
+        updateBtn = iconButton(R.drawable.ic_refresh, "Check for Updates") { Updater.check(this) }
+        header.addView(updateBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)))
         root.addView(header)
 
         list = ListView(this).apply {
@@ -83,8 +87,12 @@ class HomeActivity : Activity() {
         root.setBackgroundColor(Theme.bg())
         window.decorView.setBackgroundColor(Theme.bg())
         title.setTextColor(Theme.text())
-        more.setColorFilter(Theme.text())
-        (more.background as? RippleDrawable)?.setColor(android.content.res.ColorStateList.valueOf(Theme.ripple()))
+        for (b in listOf(themeBtn, updateBtn)) {
+            b.setColorFilter(Theme.text())
+            (b.background as? RippleDrawable)?.setColor(android.content.res.ColorStateList.valueOf(Theme.ripple()))
+        }
+        themeBtn.setImageResource(if (Theme.light) R.drawable.ic_bulb_off else R.drawable.ic_bulb_on)
+        themeBtn.contentDescription = if (Theme.light) "Toggle Dark Mode" else "Toggle Light Mode"
         for (i in 0 until list.childCount) paintRow(list.getChildAt(i))
         Theme.applyBars(window)
     }
@@ -95,49 +103,6 @@ class HomeActivity : Activity() {
         (row.getChildAt(0) as TextView).setTextColor(Theme.text())
         (row.getChildAt(1) as TextView).setTextColor(Theme.sub())
         (row.background as? RippleDrawable)?.setColor(android.content.res.ColorStateList.valueOf(Theme.ripple()))
-    }
-
-    private fun showMenu(anchor: View) {
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = pill(Theme.popup(), 12f)
-            elevation = dp(8f)
-            setPadding(0, dpi(8), 0, dpi(8))
-        }
-        val pop = PopupWindow(box, WRAP_CONTENT, WRAP_CONTENT, true).apply {
-            elevation = dp(8f)
-            setBackgroundDrawable(null)
-        }
-        // Every row's mark sits in the same 22 dp slot, the switch included.
-        fun item(icon: Int, text: String, tint: Int, act: (ImageView) -> Unit, closes: Boolean = true) {
-            val mark = ImageView(this).apply { setImageResource(icon); setColorFilter(tint) }
-            box.addView(LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                background = ripple()
-                setPadding(dpi(16), dpi(12), dpi(24), dpi(12))
-                addView(mark, LinearLayout.LayoutParams(dpi(22), dpi(22)))
-                addView(label(text, 15f, Theme.text()).apply { setPadding(dpi(16), 0, 0, 0) })
-                setOnClickListener { if (closes) pop.dismiss(); act(mark) }
-            }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
-        }
-        if (Theme.light) item(R.drawable.ic_bulb_off, "Toggle Dark Mode", Theme.text(), { Theme.toggle(this) })
-        else item(R.drawable.ic_bulb_on, "Toggle Light Mode", ACCENT, { Theme.toggle(this) })
-        val prefs = getSharedPreferences("ursa", MODE_PRIVATE)
-        val flickOn = prefs.getBoolean("flick", true)
-        // The switch stays open so the knob is seen moving; its slide is the Tabler pair, animated.
-        item(if (flickOn) R.drawable.ic_toggle_on else R.drawable.ic_toggle_off, "Flick Left/Right",
-            if (flickOn) ACCENT else Theme.text(), { mark ->
-                val on = !prefs.getBoolean("flick", true)
-                prefs.edit().putBoolean("flick", on).apply()
-                val avd = getDrawable(if (on) R.drawable.avd_toggle_on else R.drawable.avd_toggle_off) as android.graphics.drawable.AnimatedVectorDrawable
-                mark.setImageDrawable(avd)
-                mark.setColorFilter(if (on) ACCENT else Theme.text())
-                avd.start()
-            }, closes = false)
-        item(R.drawable.ic_refresh, "Check for Updates", Theme.text(), { Updater.check(this) })
-        val at = IntArray(2).also { anchor.getLocationInWindow(it) }
-        pop.showAtLocation(root, Gravity.TOP or Gravity.END, dpi(12), at[1])
     }
 
     override fun onResume() {

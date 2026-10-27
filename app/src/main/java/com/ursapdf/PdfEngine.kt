@@ -102,7 +102,7 @@ class PdfEngine private constructor(private val pfd: ParcelFileDescriptor, priva
         Thread(::loop, "ursa-render").apply { priority = Thread.NORM_PRIORITY + 1; start() }
     }
 
-    // Thumbnail box. The strip and the fast flip share these bitmaps, so one size for both.
+    // Thumbnail box. The strip and the page view (while a page renders) share these bitmaps.
     private val density = ctx.resources.displayMetrics.density
     val thumbW = 56 * density
     val thumbMaxH = 80 * density

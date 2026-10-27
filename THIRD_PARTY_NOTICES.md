@@ -6,7 +6,7 @@ The "PDF" lettering in the launcher icon (`app/src/main/res/drawable/ic_bear.xml
 
 ## Tabler Icons 3.19.0
 
-The UI icons in `app/src/main/res/drawable/ic_*.xml` (except `ic_bear.xml`) and the toggle animations `avd_toggle_*.xml` are converted from Tabler Icons, https://tabler.io/icons.
+The UI icons in `app/src/main/res/drawable/ic_*.xml` (except `ic_bear.xml`) are converted from Tabler Icons, https://tabler.io/icons.
 
 ```
 MIT License

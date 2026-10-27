@@ -78,25 +78,6 @@ class PdfView(ctx: Context) : View(ctx) {
     private val swipeMin = ctx.dp(60f)
     private val flingMin = ctx.dp(400f)
 
-    /**
-     * Hard flick: fast AND far. The user judged 1.2.0's rule nearly right after
-     * trying three stricter and looser ones (16.25 in/s, 2600 dp/s at the default
-     * display size, over 40% of the width), then asked for it a bit stiffer: 19.5
-     * in/s, 20% faster, same reach. 1.2.0 missed flicks started at a side edge, but
-     * the system Back gesture took those, fixed by the exclusion band below.
-     *
-     * Speed is in physical inches, from the panel's real pixel density (xdpi), so
-     * the display-size setting cannot move it. Thresholds in dp did move: a larger
-     * display size raises the density and so raised the bar in pixels.
-     */
-    var flick = true
-    private val pxPerInch = ctx.resources.displayMetrics.let { m ->
-        m.xdpi.takeIf { it in 100f..1000f } ?: m.densityDpi.toFloat()  // some phones misreport xdpi
-    }
-    private val flickInches = 19.5f          // per second
-    private val flickReach = 0.40f           // of the view width
-    private var flipAnim: ValueAnimator? = null
-    private var flipTarget = -1
     private var zoomAnim: ValueAnimator? = null
     private var edgeDir = 0                  // +1 next, -1 previous: a push past a zoomed page's edge
     private var dragZoomed = false           // this touch zoomed by pinch or quick scale
@@ -109,7 +90,6 @@ class PdfView(ctx: Context) : View(ctx) {
     private var downX = 0f
     private var downAtRight = false
     private var downAtLeft = false
-    private var stoppedFlip = false
 
     private val bmpPaint = Paint(Paint.FILTER_BITMAP_FLAG)
     private val white = Paint().apply { color = Color.WHITE }
@@ -149,7 +129,7 @@ class PdfView(ctx: Context) : View(ctx) {
     }
 
     override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
-        // A flick started at a side edge would be taken as the system Back gesture.
+        // A swipe started at a side edge would be taken as the system Back gesture.
         // Android lets an app keep up to 200 dp of height per edge; keep the middle.
         val band = context.dpi(200); val edge = context.dpi(48); val top = (h - band) / 2
         systemGestureExclusionRects = listOf(
@@ -167,7 +147,6 @@ class PdfView(ctx: Context) : View(ctx) {
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
         turnAnim?.cancel()
-        flipAnim?.cancel()
         zoomAnim?.cancel()
         eng?.listeners?.remove(onRendered)
     }
@@ -217,7 +196,7 @@ class PdfView(ctx: Context) : View(ctx) {
         invalidate()
     }
 
-    /** [turned]: the page moved under a swipe or flick, not a jump from the strip. */
+    /** [turned]: the page moved under a swipe, not a jump from the strip. */
     private fun setPage(p: Int, turned: Boolean = false) {
         shift = 0f; zoom = 1f; sx = 0f; sy = 0f
         scroller.forceFinished(true)
@@ -268,55 +247,6 @@ class PdfView(ctx: Context) : View(ctx) {
             })
             start()
         }
-    }
-
-    /**
-     * Rapid flip after a hard flick. Pages to travel grow with speed: 3 at the
-     * threshold, one more per 0.75 in/s (1.2.0's 120 dp/s), at most 80. It eases out
-     * like inertia and never runs past 2.5 s.
-     */
-    private fun startFlip(vx: Float) {
-        val step = width + gap
-        val start = currentPage - shift / step
-        val inches = abs(vx) / pxPerInch
-        val pages = (3 + (inches - flickInches) / 0.75f).toInt().coerceIn(3, 80)
-        val dir = if (vx < 0) 1 else -1
-        val target = (Math.round(start) + dir * pages).coerceIn(0, n - 1)
-        if (target == currentPage && shift == 0f) return
-        val ms = (400 + abs(target - start) * 25).toLong().coerceAtMost(2500L)
-        flipTarget = target
-        listener?.onTurned(currentPage)  // the page pill comes up as the flick starts
-        flipAnim = ValueAnimator.ofFloat(start, target.toFloat()).apply {
-            duration = ms
-            interpolator = DecelerateInterpolator(2f)
-            addUpdateListener { setFlipPos(it.animatedValue as Float) }
-            addListener(object : android.animation.AnimatorListenerAdapter() {
-                private var cancelled = false
-                override fun onAnimationCancel(a: android.animation.Animator) { cancelled = true }
-                override fun onAnimationEnd(a: android.animation.Animator) {
-                    flipTarget = -1
-                    if (!cancelled) setPage(target, turned = true)
-                }
-            })
-            start()
-        }
-    }
-
-    private fun isHardFlick(e1: MotionEvent?, e2: MotionEvent, vx: Float): Boolean {
-        if (e1 == null) return false
-        return abs(vx) / pxPerInch >= flickInches && abs(e2.x - e1.x) >= width * flickReach
-    }
-
-    /** Fractional page position: the floor page is current, the next one slides in beside it. */
-    private fun setFlipPos(pos: Float) {
-        val p = pos.toInt().coerceIn(0, n - 1)
-        if (p != currentPage) {
-            currentPage = p
-            listener?.onPageChanged(p)
-            listener?.onTurned(p)
-        }
-        shift = -(pos - p) * (width + gap)
-        invalidate()
     }
 
     /** Finger moves the page; past the first or last page it moves at a third of the speed. */
@@ -394,9 +324,9 @@ class PdfView(ctx: Context) : View(ctx) {
             if (scaling) return true
             flung = true
             when (drag) {
-                Drag.TURN -> if (flick && isHardFlick(e1, e2, vx)) startFlip(vx) else finishTurn(vx)
+                Drag.TURN -> finishTurn(vx)
                 Drag.VERTICAL -> if (abs(vy) > flingMin || abs(vDist) > swipeMin) listener?.onVerticalSwipe()
-                // A flick from the edge counts as a plain swipe: one page.
+                // A fling from the edge turns one page.
                 Drag.PAN -> if (edgeDir != 0 && abs(vx) > abs(vy) && abs(vx) > flingMin && (vx < 0) == (edgeDir > 0)) edgeTurn(edgeDir) else {
                     val maxX = max(0f, pageW() - width).toInt()
                     val maxY = max(0f, pageH() - height).toInt()
@@ -454,7 +384,7 @@ class PdfView(ctx: Context) : View(ctx) {
         }
 
         private fun tap(e: MotionEvent) {
-            if (drag == Drag.NONE && shift == 0f && !stoppedFlip) listener?.onTap(e.x, e.y)
+            if (drag == Drag.NONE && shift == 0f) listener?.onTap(e.x, e.y)
         }
     // No long-press action exists, and a detected long press drops every later move:
     // a held quick-scale drag froze after 400 ms.
@@ -526,22 +456,12 @@ class PdfView(ctx: Context) : View(ctx) {
         if (e.actionMasked == MotionEvent.ACTION_DOWN) {
             // A touch during a turn finishes it at once, so the next drag starts clean.
             turnAnim?.let { if (it.isRunning) it.end() }
-            // A touch during a flip stops it on the nearest page, like a hand on the book.
-            flipAnim?.let {
-                if (it.isRunning) {
-                    it.cancel()
-                    stoppedFlip = true
-                    val frac = -shift / (width + gap)
-                    setPage((currentPage + if (frac > 0.5f) 1 else 0).coerceIn(0, n - 1), turned = true)
-                }
-            }
             scroller.forceFinished(true)
             drag = Drag.NONE; vDist = 0f; flung = false; edgeDir = 0; dragZoomed = false
             val maxX = max(0f, pageW() - width)
             downX = e.x
             downAtRight = zoom > 1.01f && sx >= maxX - 1
             downAtLeft = zoom > 1.01f && sx <= 1
-            if (flipAnim?.isRunning != true) stoppedFlip = false
         }
         scaleDet.onTouchEvent(e)
         gestures.onTouchEvent(e)
@@ -577,16 +497,6 @@ class PdfView(ctx: Context) : View(ctx) {
         val want = ArrayList<Req>()
         val tiles = ArrayList<Req>()
         val cur = currentPage
-        if (flipTarget >= 0) {
-            // Mid-flip: the landing page first, then cheap thumbnails along the way.
-            if (e.base.get(PdfEngine.key(PdfEngine.BASE, flipTarget)) == null) want += baseReq(e, flipTarget)
-            val dir = if (flipTarget >= cur) 1 else -1
-            for (k in 0..8) {
-                val p = cur + dir * k
-                if (p < 0 || p >= n) break
-                if (e.thumbs.get(PdfEngine.key(PdfEngine.THUMB, p)) == null) want += e.thumbReq(p)
-            }
-        }
 
         drawPage(canvas, e, cur, left() + shift, top(), zoom, want, tiles)
         val step = width + gap

@@ -6,6 +6,10 @@ memory `ursapdf.md`.
 
 - Load `ui-layout` before any interface work.
 
+## Releases
+
+- **Only the newest release exists on GitHub.** The release workflow deletes every older release and its tag after it publishes; never restore or keep an old one.
+
 ## Icons
 
 - **Every UI icon comes from Tabler Icons; never draw one by hand.** Download the outline SVG at a pinned version and convert it with `python -I tools/svg2vd.py <svg dir> app/src/main/res/drawable name=ic_x`. List new icons in `THIRD_PARTY_NOTICES.md`.

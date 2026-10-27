@@ -129,7 +129,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
         bottom.addView(badge, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { bottomMargin = dpi(12) })
         ui.addView(bottom, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.BOTTOM))
 
-        // The same pill, shown alone for a moment after a swipe or flick turns the page.
+        // The same pill, shown alone for a moment after a swipe turns the page.
         flash = label("", 13f, Theme.text(), bold = true).apply {
             setPadding(dpi(16), dpi(8), dpi(16), dpi(8))
             alpha = 0f
@@ -188,7 +188,6 @@ class ReaderActivity : Activity(), PdfView.Listener {
         }
         scrubber = sc
         bottom.addView(sc, LinearLayout.LayoutParams(MATCH_PARENT, dpi(32) + insets[3]))
-        pdf.flick = getSharedPreferences("ursa", MODE_PRIVATE).getBoolean("flick", true)
         applyTheme()
         updatePill()
         Store.put(this, s)
@@ -213,8 +212,8 @@ class ReaderActivity : Activity(), PdfView.Listener {
     override fun onPageChanged(page: Int) = updatePill()
 
     /**
-     * After a swipe or flick: fade the page pill in (250 ms), hold 0.625 s, fade out
-     * (250 ms). A flick turns pages faster than that, so each turn restarts the hold.
+     * After a swipe: fade the page pill in (250 ms), hold 0.625 s, fade out
+     * (250 ms). Each turn restarts the hold.
      * The chrome already shows the same pill, so nothing flashes while it is up.
      * The fades are linear: an ease-out curve reaches 80% opacity in the first 60 ms,
      * so a 250 ms fade read as a pop.

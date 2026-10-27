@@ -182,14 +182,28 @@ class PdfView(ctx: Context) : View(ctx) {
     private fun pageW() = if (fit.isEmpty()) 0f else dw[currentPage] * zoom
     private fun pageH() = if (fit.isEmpty()) 0f else dh[currentPage] * zoom
 
+    /**
+     * Screen rows that chrome covers, top and bottom. While search is up the page may
+     * scroll this far past its edges, so a match at the foot of a page can rise above
+     * the search strip; a short page centres in the uncovered band.
+     */
+    private var bandTop = 0f
+    private var bandBottom = 0f
+
+    fun setBand(top: Float, bottom: Float) {
+        bandTop = top; bandBottom = bottom
+        changed()
+    }
+
     private fun clamp() {
         val w = pageW(); val h = pageH()
         sx = if (w <= width) 0f else sx.coerceIn(0f, w - width)
-        sy = if (h <= height) 0f else sy.coerceIn(0f, h - height)
+        val band = height - bandTop - bandBottom
+        sy = if (h <= band) -(bandTop + (band - h) / 2) else sy.coerceIn(-bandTop, h - height + bandBottom)
     }
 
     private fun left() = pageW().let { if (it < width) (width - it) / 2 else -sx }
-    private fun top() = pageH().let { if (it < height) (height - it) / 2 else -sy }
+    private fun top() = -sy  // clamp() centres a short page by making sy negative
 
     private fun changed() {
         clamp()
@@ -499,9 +513,10 @@ class PdfView(ctx: Context) : View(ctx) {
         val cur = currentPage
 
         drawPage(canvas, e, cur, left() + shift, top(), zoom, want, tiles)
+        drawHits(canvas, e, cur, left() + shift, top(), zoom)
         val step = width + gap
-        if (shift < 0 && cur + 1 < n) drawPage(canvas, e, cur + 1, fitLeft(cur + 1) + shift + step, fitTop(cur + 1), 1f, want, null)
-        if (shift > 0 && cur > 0) drawPage(canvas, e, cur - 1, fitLeft(cur - 1) + shift - step, fitTop(cur - 1), 1f, want, null)
+        if (shift < 0 && cur + 1 < n) { drawPage(canvas, e, cur + 1, fitLeft(cur + 1) + shift + step, fitTop(cur + 1), 1f, want, null); drawHits(canvas, e, cur + 1, fitLeft(cur + 1) + shift + step, fitTop(cur + 1), 1f) }
+        if (shift > 0 && cur > 0) { drawPage(canvas, e, cur - 1, fitLeft(cur - 1) + shift - step, fitTop(cur - 1), 1f, want, null); drawHits(canvas, e, cur - 1, fitLeft(cur - 1) + shift - step, fitTop(cur - 1), 1f) }
 
         want += tiles
         for (p in intArrayOf(cur + 1, cur - 1, cur + 2, cur - 2)) {
@@ -509,6 +524,55 @@ class PdfView(ctx: Context) : View(ctx) {
             if (e.base.get(PdfEngine.key(PdfEngine.BASE, p)) == null) want += baseReq(e, p)
         }
         e.submit(PdfEngine.Q_VIEW, want)
+    }
+
+    // ---- search hits ----
+
+    /** Matches to paint: page to matches, each match a list of page-point rects. */
+    var hits: Map<Int, List<List<RectF>>> = emptyMap()
+        set(v) { field = v; invalidate() }
+    /** The match being viewed: page and index within that page. */
+    var focusHit: Pair<Int, Int>? = null
+        set(v) { field = v; invalidate() }
+    private val hitPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val focusLine = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = ctx.dp(2f) }
+    private val hr = RectF()
+
+    /**
+     * Bring a match into the band of screen between [visTop] and [visBottom] (the part no
+     * chrome covers): zoom to at least 2x, the match centred in the band.
+     */
+    fun reveal(page: Int, rect: RectF, visTop: Float, visBottom: Float) {
+        val e = eng ?: return
+        if (page != currentPage) setPage(page)
+        scroller.forceFinished(true)
+        bandTop = visTop; bandBottom = height - visBottom
+        zoom = max(zoom, 2f)
+        val s = fit[page] * zoom
+        val cx = (rect.centerX() - e.crop.left * e.pw[page]) * s
+        val cy = (rect.centerY() - e.crop.top * e.ph[page]) * s
+        sx = cx - width / 2f
+        sy = cy - (visTop + visBottom) / 2f
+        changed()
+    }
+
+    private fun drawHits(c: Canvas, e: PdfEngine, i: Int, x: Float, y: Float, z: Float) {
+        val list = hits[i] ?: return
+        val s = fit[i] * z  // screen px per point
+        val ox = x - e.crop.left * e.pw[i] * s
+        val oy = y - e.crop.top * e.ph[i] * s
+        val ink = Theme.accentInk()
+        val pad = context.dp(2f)
+        list.forEachIndexed { k, rects ->
+            val focused = focusHit?.let { it.first == i && it.second == k } == true
+            hitPaint.color = ink; hitPaint.alpha = if (focused) 140 else 70
+            focusLine.color = ink
+            for (r in rects) {
+                hr.set(ox + r.left * s - pad, oy + r.top * s - pad, ox + r.right * s + pad, oy + r.bottom * s + pad)
+                c.drawRoundRect(hr, pad, pad, hitPaint)
+                if (focused) c.drawRoundRect(hr, pad, pad, focusLine)
+            }
+        }
     }
 
     private fun fitLeft(i: Int) = (width - dw[i]) / 2

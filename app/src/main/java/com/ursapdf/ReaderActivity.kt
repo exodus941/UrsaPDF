@@ -41,6 +41,24 @@ class ReaderActivity : Activity(), PdfView.Listener {
     private lateinit var backBtn: ImageView
     private lateinit var cropBtn: ImageView
     private lateinit var themeBtn: ImageView
+    private lateinit var searchBtn: ImageView
+    // Search strip: a field row, and under it the previous / count / next row.
+    private lateinit var search: LinearLayout
+    private lateinit var fieldRow: LinearLayout
+    private lateinit var navRow: LinearLayout
+    private lateinit var field: android.widget.EditText
+    private lateinit var goBtn: ImageView
+    private lateinit var closeBtn: ImageView
+    private lateinit var prevBtn: ImageView
+    private lateinit var nextBtn: ImageView
+    private lateinit var count: TextView
+    private var searching = false
+    private var resultsShown = false
+    private var searchGen = 0
+    private var searchDone = false
+    private val results = ArrayList<Pair<Int, Int>>()       // page, match index on that page
+    private val hits = HashMap<Int, List<List<RectF>>>()
+    private var at = -1
     private lateinit var flash: TextView
     private val onTheme: () -> Unit = { applyTheme() }
     private var invertAnim: ValueAnimator? = null
@@ -110,6 +128,8 @@ class ReaderActivity : Activity(), PdfView.Listener {
             ellipsize = TextUtils.TruncateAt.MIDDLE
         }
         top.addView(titleView, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+        searchBtn = iconButton(R.drawable.ic_search, "Search") { openSearch() }.apply { visibility = View.GONE }
+        top.addView(searchBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)))
         cropBtn = iconButton(R.drawable.ic_crop, "Page Cropper") { openCropper() }
         top.addView(cropBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)))
         invertBtn = iconButton(R.drawable.ic_invert, "Invert Colours") { toggleInvert() }
@@ -128,6 +148,13 @@ class ReaderActivity : Activity(), PdfView.Listener {
         }
         bottom.addView(badge, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { bottomMargin = dpi(12) })
         ui.addView(bottom, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.BOTTOM))
+        buildSearchStrip()
+        ui.addView(search, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.BOTTOM))
+        // Hidden: fully below the screen. Typing: only the field row shows. Results: both rows.
+        search.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
+            if (!searching) v.translationY = v.height.toFloat()
+            else if (!resultsShown) v.translationY = navRow.height.toFloat()
+        }
 
         // The same pill, shown alone for a moment after a swipe turns the page.
         flash = label("", 13f, Theme.text(), bold = true).apply {
@@ -144,6 +171,9 @@ class ReaderActivity : Activity(), PdfView.Listener {
         root.setOnApplyWindowInsetsListener { _, ins ->
             insets = ins.safe()
             top.setPadding(insets[0], insets[1], insets[2], 0)
+            // The search strip rides on the keyboard while it is up.
+            val ime = if (android.os.Build.VERSION.SDK_INT >= 30) ins.getInsets(android.view.WindowInsets.Type.ime()).bottom else 0
+            search.setPadding(insets[0], 0, insets[2], maxOf(insets[3], ime))
             (flash.layoutParams as FrameLayout.LayoutParams).bottomMargin = dpi(32) + insets[3]
             flash.requestLayout()
             strip?.setPadding(insets[0], 0, insets[2], 0)
@@ -189,6 +219,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
         }
         scrubber = sc
         bottom.addView(sc, LinearLayout.LayoutParams(MATCH_PARENT, dpi(32) + insets[3]))
+        searchBtn.visibility = if (e.canSearch) View.VISIBLE else View.GONE
         applyTheme()
         updatePill()
         Store.put(this, s)
@@ -238,7 +269,11 @@ class ReaderActivity : Activity(), PdfView.Listener {
     private fun applyTheme() {
         top.setBackgroundColor(Theme.panel())
         titleView.setTextColor(Theme.text())
-        for (b in listOf(backBtn, cropBtn, themeBtn)) {
+        search.setBackgroundColor(Theme.panel())
+        fieldRow.findViewWithTag<View>("box").background = pill(Theme.button(), 14f)
+        field.setTextColor(Theme.text()); field.setHintTextColor(Theme.sub())
+        count.setTextColor(Theme.text())
+        for (b in listOf(backBtn, searchBtn, cropBtn, themeBtn, goBtn, closeBtn, prevBtn, nextBtn)) {
             b.setColorFilter(Theme.text())
             (b.background as? android.graphics.drawable.RippleDrawable)?.setColor(android.content.res.ColorStateList.valueOf(Theme.ripple()))
         }
@@ -256,13 +291,14 @@ class ReaderActivity : Activity(), PdfView.Listener {
 
     override fun onTap(x: Float, y: Float) {
         if (eng == null) return
+        if (searching) { keyboard(false); return }
         if (uiShown) { hideUi(); return }
         val w = pdf.width; val h = pdf.height
         if (x > w * 0.25f && x < w * 0.75f && y > h * 0.25f && y < h * 0.75f) showUi()
     }
 
     override fun onVerticalSwipe() {
-        if (eng == null) return
+        if (eng == null || searching) return
         if (uiShown) hideUi() else showUi()
     }
 
@@ -364,9 +400,158 @@ class ReaderActivity : Activity(), PdfView.Listener {
         eng = null
     }
 
+    // ---- search ----
+
+    private fun buildSearchStrip() {
+        fun icon(res: Int, name: String, act: () -> Unit) = ImageView(this).apply {
+            setImageResource(res)
+            background = ripple()
+            setPadding(dpi(12), dpi(12), dpi(12), dpi(12))
+            contentDescription = name
+            setOnClickListener { act() }
+        }
+        search = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; isClickable = true }
+        fieldRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dpi(12), dpi(8), dpi(4), dpi(8))
+        }
+        val box = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; tag = "box" }
+        field = android.widget.EditText(this).apply {
+            hint = "Search in this PDF"
+            textSize = 16f
+            isSingleLine = true
+            background = null
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+            setPadding(dpi(16), dpi(12), dpi(8), dpi(12))
+            setOnEditorActionListener { _, id, _ ->
+                if (id == android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH) { runSearch(); true } else false
+            }
+        }
+        box.addView(field, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+        goBtn = icon(R.drawable.ic_search, "Find") { runSearch() }
+        box.addView(goBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)))
+        fieldRow.addView(box, LinearLayout.LayoutParams(0, dpi(48), 1f))
+        closeBtn = icon(R.drawable.ic_close, "Close search") { closeSearch() }
+        fieldRow.addView(closeBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)).apply { marginStart = dpi(4) })
+        search.addView(fieldRow)
+
+        navRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dpi(12), 0, dpi(12), dpi(8))
+            alpha = 0f
+        }
+        prevBtn = icon(R.drawable.ic_prev, "Previous result") { step(-1) }
+        navRow.addView(prevBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)))
+        count = label("", 15f, Theme.text(), bold = true).apply { gravity = Gravity.CENTER }
+        navRow.addView(count, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+        nextBtn = icon(R.drawable.ic_next, "Next result") { step(1) }
+        navRow.addView(nextBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)))
+        search.addView(navRow)
+    }
+
+    private fun keyboard(show: Boolean) {
+        val im = getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+        if (show) { field.requestFocus(); im.showSoftInput(field, 0) }
+        else { im.hideSoftInputFromWindow(field.windowToken, 0); field.clearFocus() }
+    }
+
+    /** The page strip slides out, then the search strip rises in its place (%ease250% each). */
+    private fun openSearch() {
+        if (searching || eng?.canSearch != true) return
+        searching = true; resultsShown = false
+        navRow.alpha = 0f
+        bottom.animate().translationY(bottom.height.toFloat()).setDuration(Motion.MS).setInterpolator(Motion.OUT).withEndAction {
+            strip?.visibility = View.INVISIBLE
+            if (!searching) return@withEndAction
+            search.animate().translationY(navRow.height.toFloat()).setDuration(Motion.MS).setInterpolator(Motion.IN).start()
+            keyboard(true)
+        }.start()
+        eng?.submit(PdfEngine.Q_THUMB, emptyList())
+    }
+
+    /** Search every page; the strip rises further to show previous / count / next. */
+    private fun runSearch() {
+        val e = eng ?: return
+        val q = field.text.toString().trim()
+        if (q.isEmpty()) return
+        keyboard(false)
+        results.clear(); hits.clear(); at = -1; searchDone = false
+        pdf.hits = hits; pdf.focusHit = null
+        searchGen = e.search(q)
+        e.onMatches = { g, page, rects ->
+            if (g == searchGen) {
+                hits[page] = rects
+                for (k in rects.indices) results += page to k
+                pdf.hits = hits
+                if (at < 0) goTo(0) else updateCount()
+            }
+        }
+        e.onSearchDone = { g -> if (g == searchGen) { searchDone = true; updateCount() } }
+        updateCount()
+        if (!resultsShown) {
+            resultsShown = true
+            search.animate().translationY(0f).setDuration(Motion.MS).setInterpolator(Motion.IN).start()
+            navRow.animate().alpha(1f).setDuration(Motion.MS).setInterpolator(Motion.FADE).start()
+        }
+    }
+
+    private fun goTo(i: Int) {
+        if (i !in results.indices) return
+        at = i
+        val (page, k) = results[i]
+        pdf.focusHit = page to k
+        // The match must not sit under the top bar or the search strip.
+        val visTop = (top.bottom + top.translationY).coerceAtLeast(0f)
+        val visBottom = search.top + search.translationY
+        hits[page]?.getOrNull(k)?.firstOrNull()?.let { pdf.reveal(page, it, visTop, visBottom) }
+        updateCount()
+    }
+
+    private fun step(d: Int) = goTo(at + d)
+
+    private fun updateCount() {
+        val more = if (searchDone) "" else "…"
+        count.text = when {
+            results.isEmpty() && searchDone -> "No matches"
+            results.isEmpty() -> "Searching…"
+            else -> "${at + 1} of ${results.size}$more"
+        }
+        // Previous stops at the first result, Next at the last.
+        setEnabled(prevBtn, at > 0)
+        setEnabled(nextBtn, at in 0 until results.size - 1)
+    }
+
+    private fun setEnabled(b: ImageView, on: Boolean) {
+        b.isEnabled = on
+        b.alpha = if (on) 1f else 0.35f
+    }
+
+    /** Back to the plain reader, skipping the page strip: search and top bar slide out. */
+    private fun closeSearch() {
+        if (!searching) return
+        searching = false; resultsShown = false
+        eng?.search(null)
+        results.clear(); hits.clear(); at = -1
+        pdf.hits = emptyMap(); pdf.focusHit = null
+        pdf.setBand(0f, 0f)
+        keyboard(false)
+        search.animate().translationY(search.height.toFloat()).setDuration(Motion.MS).setInterpolator(Motion.OUT).start()
+        navRow.animate().alpha(0f).setDuration(Motion.MS).setInterpolator(Motion.FADE).start()
+        uiShown = false
+        top.animate().translationY(-top.height.toFloat()).setDuration(Motion.MS).setInterpolator(Motion.OUT).start()
+    }
+
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        if (cropper != null) closeCropper(null) else goHome()
+        when {
+            cropper != null -> closeCropper(null)
+            // While viewing results, Back steps back one result; from the first, it closes.
+            searching && resultsShown && at > 0 -> step(-1)
+            searching -> closeSearch()
+            else -> goHome()
+        }
     }
 
     /** Opened from another app, the reader is the task root; Back still lands on the home list. */

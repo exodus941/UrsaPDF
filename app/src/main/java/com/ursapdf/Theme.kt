@@ -31,6 +31,9 @@ object Theme {
     fun sub() = mix(0xFF999999.toInt(), 0xFF555555.toInt())
     // Opaque: a see-through panel lets page text show behind the thumbnails.
     fun panel() = mix(0xFF181818.toInt(), 0xFFF2F2F2.toInt())
+    fun popup() = mix(0xFF262626.toInt(), 0xFFFFFFFF.toInt())
+    /** Ground of a selected list row. */
+    fun selected() = mix(0x33FFB300, 0x26C26400)
     fun line() = mix(0xFF333333.toInt(), 0xFFD0D0D0.toInt())
     fun button() = mix(0xFF333333.toInt(), 0xFFE4E4E4.toInt())
     fun ripple() = mix(0x33FFFFFF, 0x22000000)

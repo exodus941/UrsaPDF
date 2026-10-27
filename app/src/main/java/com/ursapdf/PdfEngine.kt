@@ -10,7 +10,9 @@ import android.graphics.Matrix
 import android.graphics.RectF
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
+import android.os.ext.SdkExtensions
 import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.util.LruCache
@@ -174,19 +176,59 @@ class PdfEngine private constructor(private val pfd: ParcelFileDescriptor, priva
         synchronized(lock) { lock.notify() }
     }
 
+    // ---- text search ----
+    // Android 15's PdfRenderer reads page text (also on 11-14 with SDK extension 13).
+    // A search runs one page at a time on the worker, after any pending renders, so a
+    // long document stays responsive while it is searched.
+
+    val canSearch = Build.VERSION.SDK_INT >= 35 ||
+        (Build.VERSION.SDK_INT >= 30 && SdkExtensions.getExtensionVersion(Build.VERSION_CODES.S) >= 13)
+
+    private var searchQ: String? = null   // guarded by lock
+    private var searchGen = 0             // guarded by lock
+    private var searchNext = 0            // guarded by lock
+
+    /** Called on the main thread with each page's matches (page-point rects), then done. */
+    var onMatches: ((gen: Int, page: Int, rects: List<List<RectF>>) -> Unit)? = null
+    var onSearchDone: ((gen: Int) -> Unit)? = null
+
+    /** Start searching every page for [q] (null stops). Returns the search's id. */
+    fun search(q: String?): Int = synchronized(lock) {
+        searchGen++
+        searchQ = q?.takeIf { it.isNotEmpty() && canSearch }
+        searchNext = 0
+        lock.notify()
+        searchGen
+    }
+
     private fun loop() {
         while (true) {
-            val r: Req
+            var next: Req? = null
+            var q: String? = null
+            var qPage = 0
+            var qGen = 0
             synchronized(lock) {
-                while (!closed && queues.all { it.isEmpty() }) lock.wait()
+                while (!closed && queues.all { it.isEmpty() } && searchQ == null) lock.wait()
                 if (closed) {
                     openPage?.close(); renderer.close(); pfd.close()
                     return
                 }
-                r = queues.first { it.isNotEmpty() }.removeFirst()
-                busy.add(r.key)
+                if (queues.any { it.isNotEmpty() }) {
+                    next = queues.first { it.isNotEmpty() }.removeFirst()
+                    busy.add(next!!.key)
+                } else {
+                    q = searchQ; qPage = searchNext++; qGen = searchGen
+                    if (searchNext >= pageCount) searchQ = null
+                }
             }
-            val bmp = try { render(r) } catch (e: Throwable) { null }
+            val job = next
+            if (job == null) {
+                if (q != null) searchPage(q!!, qPage, qGen, last = qPage >= pageCount - 1)
+                continue
+            }
+            val r1 = job
+            val bmp = try { render(r1) } catch (e: Throwable) { null }
+            val r = r1
             main.post {
                 synchronized(lock) { busy.remove(r.key) }
                 if (closed) return@post
@@ -197,12 +239,31 @@ class PdfEngine private constructor(private val pfd: ParcelFileDescriptor, priva
     }
 
     /** Worker. */
-    private fun render(r: Req): Bitmap {
-        if (openIdx != r.page) {
+    private fun page(i: Int): PdfRenderer.Page {
+        if (openIdx != i) {
             openPage?.close(); openPage = null
-            openPage = renderer.openPage(r.page)
-            openIdx = r.page
+            openPage = renderer.openPage(i)
+            openIdx = i
         }
+        return openPage!!
+    }
+
+    /** Worker: one page of a search. Each match is a list of rects (one per line it spans). */
+    @android.annotation.SuppressLint("NewApi")
+    private fun searchPage(q: String, i: Int, g: Int, last: Boolean) {
+        val found = try {
+            page(i).searchText(q).map { m -> m.bounds.map { RectF(it) } }
+        } catch (e: Throwable) { emptyList() }
+        main.post {
+            if (closed) return@post
+            if (found.isNotEmpty()) onMatches?.invoke(g, i, found)
+            if (last) onSearchDone?.invoke(g)
+        }
+    }
+
+    /** Worker. */
+    private fun render(r: Req): Bitmap {
+        page(r.page)
         val bmp = Bitmap.createBitmap(r.w, r.h, Bitmap.Config.ARGB_8888)
         bmp.eraseColor(Color.WHITE)
         val m = Matrix()

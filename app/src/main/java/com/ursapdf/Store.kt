@@ -70,6 +70,19 @@ object Store {
         return try { c.contentResolver.openFileDescriptor(u, "r")?.use { it.statSize.coerceAtLeast(0) } ?: 0 } catch (_: Exception) { 0 }
     }
 
+    /** A renamed file keeps its reading state under its new address and name. */
+    fun rename(c: Context, oldUri: String, newUri: String, newName: String) {
+        val list = all(c)
+        val i = list.indexOfFirst { it.uri == oldUri }
+        if (i < 0) return
+        val o = list[i]
+        list[i] = DocState(newUri, newName).also { d ->
+            d.page = o.page; d.offset = o.offset; d.x = o.x; d.zoom = o.zoom; d.invert = o.invert
+            d.pages = o.pages; d.size = o.size; d.crop.set(o.crop); d.opened = o.opened
+        }
+        write(c, list)
+    }
+
     /** Record sizes for entries saved before sizes were kept. */
     fun setSizes(c: Context, sizes: Map<String, Long>) {
         val list = all(c)

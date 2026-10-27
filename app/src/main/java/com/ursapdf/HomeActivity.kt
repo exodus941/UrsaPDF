@@ -218,7 +218,12 @@ class HomeActivity : Activity() {
         list.setPadding(0, 0, 0, bottomInset + if (selecting) bar.height else 0)
         topFade.translationY = h.toFloat()
         empty.translationY = h + dp(24f)
-        bottomFade.translationY = -(bottomInset + if (selecting) bar.height else 0).toFloat()
+        // The list runs under the gesture bar, so the shadow runs to the screen's edge too;
+        // stopping above the bar left its darkest row against white. Over the selection
+        // bar it sits on the bar's top edge instead.
+        val fadeH = dpi(32) + if (selecting) 0 else bottomInset
+        if (bottomFade.layoutParams.height != fadeH) { bottomFade.layoutParams.height = fadeH; bottomFade.requestLayout() }
+        bottomFade.translationY = -(if (selecting) bar.height else 0).toFloat()
         updateFades()
     }
 
@@ -258,6 +263,7 @@ class HomeActivity : Activity() {
             (a.findViewWithTag<TextView>("text")).setTextColor(Theme.text())
         }
         for (i in 0 until list.childCount) paintRow(list.getChildAt(i))
+        topFade.invalidate(); bottomFade.invalidate()
         Theme.applyBars(window)
     }
 

@@ -26,6 +26,7 @@ class Scrubber(ctx: Context, private val pages: Int, private val onSeek: (Int) -
     private fun right() = width - paddingRight - pad
 
     override fun onDraw(c: Canvas) {
+        track.color = Theme.line(); fill.color = Theme.accentInk()
         val y = (height - paddingBottom) / 2f
         val l = left(); val r = right()
         val x = l + (r - l) * (current + 1) / pages

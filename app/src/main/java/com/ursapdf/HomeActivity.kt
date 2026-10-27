@@ -144,7 +144,12 @@ class HomeActivity : Activity() {
         super.onResume()
         docs = Store.all(this)
         (list.adapter as BaseAdapter).notifyDataSetChanged()
-        Updater.resumePending(this)
+        Updater.resumed(this, home = true)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        Updater.paused(this)
     }
 
     private fun openPicker() {

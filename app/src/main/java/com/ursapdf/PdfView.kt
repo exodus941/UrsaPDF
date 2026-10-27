@@ -34,6 +34,7 @@ class PdfView(ctx: Context) : View(ctx) {
 
     interface Listener {
         fun onPageChanged(page: Int)
+        fun onTurned(page: Int)
         fun onTap(x: Float, y: Float)
         fun onVerticalSwipe()
     }
@@ -76,10 +77,17 @@ class PdfView(ctx: Context) : View(ctx) {
     private val swipeMin = ctx.dp(60f)
     private val flingMin = ctx.dp(400f)
 
-    /** Hard flick: fast AND long. A normal page swipe peaks near 1500 dp/s over a third of the width. */
+    /**
+     * Hard flick: fast AND far, judged on two tiers. A deliberate page swipe on the
+     * emulator moved about 1100 dp/s. A long flick needs 2200 dp/s over a quarter
+     * of the width; a short snap needs 3200 dp/s over an eighth. The reach is
+     * scaled down near the edge the finger moves toward, which leaves no room.
+     */
     var flick = true
-    private val flickSpeed = ctx.dp(2600f)
-    private val flickReach = 0.4f            // of the view width
+    private val flickSpeed = ctx.dp(2200f)
+    private val snapSpeed = ctx.dp(3200f)
+    private val flickReach = 0.25f           // of the view width
+    private val snapReach = 0.125f
     private val flickDp = ctx.resources.displayMetrics.density
     private var flipAnim: ValueAnimator? = null
     private var flipTarget = -1
@@ -183,12 +191,14 @@ class PdfView(ctx: Context) : View(ctx) {
         invalidate()
     }
 
-    private fun setPage(p: Int) {
+    /** [turned]: the page moved under a swipe or flick, not a jump from the strip. */
+    private fun setPage(p: Int, turned: Boolean = false) {
         shift = 0f; zoom = 1f; sx = 0f; sy = 0f
         scroller.forceFinished(true)
         if (p != currentPage) {
             currentPage = p
             listener?.onPageChanged(p)
+            if (turned) listener?.onTurned(p)
         }
         changed()
     }
@@ -224,8 +234,8 @@ class PdfView(ctx: Context) : View(ctx) {
                 override fun onAnimationEnd(a: android.animation.Animator) {
                     if (cancelled) return
                     when {
-                        target < 0 -> setPage(currentPage + 1)
-                        target > 0 -> setPage(currentPage - 1)
+                        target < 0 -> setPage(currentPage + 1, turned = true)
+                        target > 0 -> setPage(currentPage - 1, turned = true)
                         else -> { shift = 0f; invalidate() }
                     }
                 }
@@ -258,11 +268,22 @@ class PdfView(ctx: Context) : View(ctx) {
                 override fun onAnimationCancel(a: android.animation.Animator) { cancelled = true }
                 override fun onAnimationEnd(a: android.animation.Animator) {
                     flipTarget = -1
-                    if (!cancelled) setPage(target)
+                    if (!cancelled) setPage(target, turned = true)
                 }
             })
             start()
         }
+    }
+
+    private fun isHardFlick(e1: MotionEvent?, e2: MotionEvent, vx: Float): Boolean {
+        if (e1 == null) return false
+        val reach = abs(e2.x - e1.x)
+        // Room the finger had: from where it started to the edge it moved toward.
+        val room = if (vx < 0) e1.x else width - e1.x
+        val scale = (room / (width * 0.6f)).coerceIn(0.5f, 1f)
+        val v = abs(vx)
+        return (v >= flickSpeed && reach >= width * flickReach * scale) ||
+            (v >= snapSpeed && reach >= width * snapReach * scale)
     }
 
     /** Fractional page position: the floor page is current, the next one slides in beside it. */
@@ -271,6 +292,7 @@ class PdfView(ctx: Context) : View(ctx) {
         if (p != currentPage) {
             currentPage = p
             listener?.onPageChanged(p)
+            listener?.onTurned(p)
         }
         shift = -(pos - p) * (width + gap)
         invalidate()
@@ -320,7 +342,8 @@ class PdfView(ctx: Context) : View(ctx) {
                 val ty = if (e1 != null) e2.y - e1.y else -dy
                 drag = when {
                     zoom > 1.01f -> Drag.PAN
-                    abs(tx) >= abs(ty) -> Drag.TURN
+                    // A thumb flick arcs, so sideways wins up to about 59 degrees.
+                    abs(tx) * 1.67f >= abs(ty) -> Drag.TURN
                     else -> Drag.VERTICAL
                 }
             }
@@ -337,10 +360,7 @@ class PdfView(ctx: Context) : View(ctx) {
             if (scaling) return true
             flung = true
             when (drag) {
-                Drag.TURN -> {
-                    val reach = if (e1 != null) abs(e2.x - e1.x) else 0f
-                    if (flick && abs(vx) >= flickSpeed && reach >= width * flickReach) startFlip(vx) else finishTurn(vx)
-                }
+                Drag.TURN -> if (flick && isHardFlick(e1, e2, vx)) startFlip(vx) else finishTurn(vx)
                 Drag.VERTICAL -> if (abs(vy) > flingMin || abs(vDist) > swipeMin) listener?.onVerticalSwipe()
                 Drag.PAN -> {
                     val maxX = max(0f, pageW() - width).toInt()
@@ -369,7 +389,7 @@ class PdfView(ctx: Context) : View(ctx) {
                     it.cancel()
                     stoppedFlip = true
                     val frac = -shift / (width + gap)
-                    setPage((currentPage + if (frac > 0.5f) 1 else 0).coerceIn(0, n - 1))
+                    setPage((currentPage + if (frac > 0.5f) 1 else 0).coerceIn(0, n - 1), turned = true)
                 }
             }
             scroller.forceFinished(true)

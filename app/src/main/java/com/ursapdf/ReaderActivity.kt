@@ -38,6 +38,11 @@ class ReaderActivity : Activity(), PdfView.Listener {
     private var state: DocState? = null
     private var insets = IntArray(4)
     private lateinit var invertBtn: ImageView
+    private lateinit var backBtn: ImageView
+    private lateinit var cropBtn: ImageView
+    private lateinit var themeBtn: ImageView
+    private lateinit var flash: TextView
+    private val onTheme: () -> Unit = { applyTheme() }
     private var invertAnim: ValueAnimator? = null
     private var uiShown = false
     private val easeOut = PathInterpolator(0f, 0f, 0.2f, 1f)
@@ -52,6 +57,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
             // ACTION_VIEW grants are temporary; the file still opens now.
         }
         Theme.load(this)
+        Theme.listeners += onTheme
         buildUi()
         window.immersive()  // needs the decor view that setContentView creates
 
@@ -89,36 +95,27 @@ class ReaderActivity : Activity(), PdfView.Listener {
             setBackgroundColor(Theme.panel())
             isClickable = true
         }
-        top.addView(ImageView(this).apply {
-            setImageResource(R.drawable.ic_back)
-            setColorFilter(Theme.text())
+        // Every top-bar control is a 48 dp square icon; the name is its content description.
+        fun iconButton(icon: Int, name: String, act: () -> Unit) = ImageView(this).apply {
+            setImageResource(icon)
             background = ripple()
             setPadding(dpi(12), dpi(12), dpi(12), dpi(12))
-            contentDescription = "Back"
-            setOnClickListener { goHome() }
-        }, LinearLayout.LayoutParams(dpi(48), dpi(48)))
+            contentDescription = name
+            setOnClickListener { act() }
+        }
+        backBtn = iconButton(R.drawable.ic_back, "Back") { goHome() }
+        top.addView(backBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)))
         titleView = label("", 16f, Theme.text()).apply {
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.MIDDLE
         }
         top.addView(titleView, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
-        top.addView(label("Page Cropper", 14f, Theme.accentInk(), bold = true).apply {
-            setCompoundDrawablesRelativeWithIntrinsicBounds(getDrawable(R.drawable.ic_crop)!!.mutate().apply { setTint(Theme.accentInk()) }, null, null, null)
-            compoundDrawablePadding = dpi(8)
-            gravity = Gravity.CENTER_VERTICAL
-            background = ripple()
-            setPadding(dpi(12), dpi(12), dpi(8), dpi(12))
-            setOnClickListener { openCropper() }
-        }, LinearLayout.LayoutParams(WRAP_CONTENT, dpi(48)))
-        invertBtn = ImageView(this).apply {
-            setImageResource(R.drawable.ic_invert)
-            setColorFilter(Theme.text())
-            background = ripple()
-            setPadding(dpi(12), dpi(12), dpi(12), dpi(12))
-            contentDescription = "Invert Colours"
-            setOnClickListener { toggleInvert() }
-        }
-        top.addView(invertBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)).apply { marginEnd = dpi(4) })
+        cropBtn = iconButton(R.drawable.ic_crop, "Page Cropper") { openCropper() }
+        top.addView(cropBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)))
+        invertBtn = iconButton(R.drawable.ic_invert, "Invert Colours") { toggleInvert() }
+        top.addView(invertBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)))
+        themeBtn = iconButton(R.drawable.ic_bulb_on, "Toggle Light Mode") { Theme.toggle(this) }
+        top.addView(themeBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)).apply { marginEnd = dpi(4) })
         ui.addView(top, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.TOP))
 
         bottom = LinearLayout(this).apply {
@@ -131,6 +128,15 @@ class ReaderActivity : Activity(), PdfView.Listener {
         }
         bottom.addView(badge, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { bottomMargin = dpi(12) })
         ui.addView(bottom, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.BOTTOM))
+
+        // The same pill, shown alone for a moment after a swipe or flick turns the page.
+        flash = label("", 13f, Theme.text(), bold = true).apply {
+            setPadding(dpi(16), dpi(8), dpi(16), dpi(8))
+            alpha = 0f
+        }
+        root.addView(flash, FrameLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+            bottomMargin = dpi(32)
+        })
         root.addView(ui, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         top.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ -> if (!uiShown) v.translationY = -v.height.toFloat() }
         bottom.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ -> if (!uiShown) v.translationY = v.height.toFloat() }
@@ -138,6 +144,8 @@ class ReaderActivity : Activity(), PdfView.Listener {
         root.setOnApplyWindowInsetsListener { _, ins ->
             insets = ins.safe()
             top.setPadding(insets[0], insets[1], insets[2], 0)
+            (flash.layoutParams as FrameLayout.LayoutParams).bottomMargin = dpi(32) + insets[3]
+            flash.requestLayout()
             strip?.setPadding(insets[0], 0, insets[2], 0)
             scrubber?.let {
                 it.setPadding(insets[0], 0, insets[2], insets[3])
@@ -181,6 +189,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
         scrubber = sc
         bottom.addView(sc, LinearLayout.LayoutParams(MATCH_PARENT, dpi(32) + insets[3]))
         pdf.flick = getSharedPreferences("ursa", MODE_PRIVATE).getBoolean("flick", true)
+        applyTheme()
         updatePill()
         Store.put(this, s)
     }
@@ -202,6 +211,45 @@ class ReaderActivity : Activity(), PdfView.Listener {
     }
 
     override fun onPageChanged(page: Int) = updatePill()
+
+    /**
+     * After a swipe or flick: fade the page pill in (250 ms), hold 1.25 s, fade out
+     * (250 ms). A flick turns pages faster than that, so each turn restarts the hold.
+     * The chrome already shows the same pill, so nothing flashes while it is up.
+     */
+    override fun onTurned(page: Int) {
+        val e = eng ?: return
+        if (uiShown) return
+        flash.text = "Page ${page + 1} of ${e.pageCount}"
+        flash.removeCallbacks(hideFlash)
+        flash.animate().cancel()
+        flash.animate().alpha(1f).setDuration((250 * (1 - flash.alpha)).toLong()).setInterpolator(easeOut).start()
+        flash.postDelayed(hideFlash, 250L + 1250L)
+    }
+
+    private val hideFlash = Runnable {
+        flash.animate().alpha(0f).setDuration(250).setInterpolator(easeIn).start()
+    }
+
+    /** Runs on every frame of a theme change. */
+    private fun applyTheme() {
+        top.setBackgroundColor(Theme.panel())
+        titleView.setTextColor(Theme.text())
+        for (b in listOf(backBtn, cropBtn, themeBtn)) {
+            b.setColorFilter(Theme.text())
+            (b.background as? android.graphics.drawable.RippleDrawable)?.setColor(android.content.res.ColorStateList.valueOf(Theme.ripple()))
+        }
+        themeBtn.setImageResource(if (Theme.light) R.drawable.ic_bulb_off else R.drawable.ic_bulb_on)
+        themeBtn.contentDescription = if (Theme.light) "Toggle Dark Mode" else "Toggle Light Mode"
+        paintInvertButton()
+        for (p in listOf(badge, flash)) {
+            p.setTextColor(Theme.text())
+            p.background = pill(Theme.panel(), 14f)
+        }
+        strip?.setBackgroundColor(Theme.panel())
+        scrubber?.setBackgroundColor(Theme.panel())
+        strip?.invalidate(); scrubber?.invalidate(); pdf.invalidate()
+    }
 
     override fun onTap(x: Float, y: Float) {
         if (eng == null) return
@@ -293,14 +341,22 @@ class ReaderActivity : Activity(), PdfView.Listener {
         if (hasFocus) window.immersive()
     }
 
+    override fun onResume() {
+        super.onResume()
+        Updater.resumed(this, home = false)
+    }
+
     override fun onPause() {
         super.onPause()
+        Updater.paused(this)
         save()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         invertAnim?.cancel()
+        Theme.listeners -= onTheme
+        flash.removeCallbacks(hideFlash)
         eng?.close()
         eng = null
     }

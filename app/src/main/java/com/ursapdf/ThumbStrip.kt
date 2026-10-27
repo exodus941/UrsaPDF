@@ -88,6 +88,7 @@ class ThumbStrip(ctx: Context, private val eng: PdfEngine, private val onPick: (
 
     override fun onDraw(canvas: Canvas) {
         val n = eng.pageCount
+        frame.color = Theme.accentInk(); text.color = Theme.sub(); textOn.color = Theme.accentInk()
         bmpPaint.colorFilter = eng.filter
         white.colorFilter = eng.filter
         val first = max(0, ((sx - pad) / item).toInt())

@@ -9,15 +9,13 @@ import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.View
 import android.widget.OverScroller
-import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
 
 /** Horizontal page previewer. Thumbnails render lazily, lowest priority. */
 class ThumbStrip(ctx: Context, private val eng: PdfEngine, private val onPick: (Int) -> Unit) : View(ctx) {
 
-    private val tw = ctx.dp(56f)
-    private val maxTh = ctx.dp(80f)
+    private val tw = eng.thumbW
     private val sp = ctx.dp(12f)
     private val item = tw + sp
     private val labelH = ctx.dp(20f)
@@ -55,14 +53,6 @@ class ThumbStrip(ctx: Context, private val eng: PdfEngine, private val onPick: (
         scroller.forceFinished(true)
         sx = (pad + i * item + tw / 2 - width / 2f).coerceIn(0f, maxScroll())
         invalidate()
-    }
-
-    private fun thumbSize(i: Int): Pair<Float, Float> {
-        val c = eng.crop
-        val aw = eng.pw[i] * c.width()
-        val ah = eng.ph[i] * c.height()
-        val s = min(tw / aw, maxTh / ah)
-        return Pair(aw * s, ah * s)
     }
 
     private val gestures = GestureDetector(ctx, object : GestureDetector.SimpleOnGestureListener() {
@@ -106,28 +96,22 @@ class ThumbStrip(ctx: Context, private val eng: PdfEngine, private val onPick: (
         val areaH = hh - labelH
         val want = ArrayList<Req>()
         for (i in first..last) {
-            val (w, h) = thumbSize(i)
+            val (w, h) = eng.thumbSize(i)
             val cx = pad + i * item + tw / 2 - sx
             val top = (areaH - h) / 2
             r.set(cx - w / 2, top, cx + w / 2, top + h)
             val k = PdfEngine.key(PdfEngine.THUMB, i)
             val b = eng.thumbs.get(k)
             if (b != null) canvas.drawBitmap(b, null, r, bmpPaint) else canvas.drawRect(r, white)
-            if (b == null) want += thumbReq(i, w, h)
+            if (b == null) want += eng.thumbReq(i)
             if (i == current) canvas.drawRect(r, frame)
             canvas.drawText("${i + 1}", cx, hh - labelH * 0.3f, if (i == current) textOn else text)
         }
         // Prefetch a few on each side.
         for (i in (first - 4 until first) + (last + 1..last + 4)) {
             if (i < 0 || i >= n || eng.thumbs.get(PdfEngine.key(PdfEngine.THUMB, i)) != null) continue
-            val (w, h) = thumbSize(i)
-            want += thumbReq(i, w, h)
+            want += eng.thumbReq(i)
         }
         eng.submit(PdfEngine.Q_THUMB, want)
-    }
-
-    private fun thumbReq(i: Int, w: Float, h: Float): Req {
-        val s = w / (eng.pw[i] * eng.crop.width())
-        return eng.req(PdfEngine.THUMB, i, 0, 0, 0, ceil(w).toInt().coerceAtLeast(1), ceil(h).toInt().coerceAtLeast(1), s)
     }
 }

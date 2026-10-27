@@ -108,20 +108,34 @@ class HomeActivity : Activity() {
             elevation = dp(8f)
             setBackgroundDrawable(null)
         }
-        fun item(icon: Int, text: String, tint: Int, act: () -> Unit) {
+        // Every row's mark sits in the same 22 dp slot, the switch included.
+        fun item(icon: Int, text: String, tint: Int, act: (ImageView) -> Unit, closes: Boolean = true) {
+            val mark = ImageView(this).apply { setImageResource(icon); setColorFilter(tint) }
             box.addView(LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 background = ripple()
                 setPadding(dpi(16), dpi(12), dpi(24), dpi(12))
-                addView(ImageView(context).apply { setImageResource(icon); setColorFilter(tint) }, LinearLayout.LayoutParams(dpi(22), dpi(22)))
+                addView(mark, LinearLayout.LayoutParams(dpi(22), dpi(22)))
                 addView(label(text, 15f, Theme.text()).apply { setPadding(dpi(16), 0, 0, 0) })
-                setOnClickListener { pop.dismiss(); act() }
+                setOnClickListener { if (closes) pop.dismiss(); act(mark) }
             }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
         }
-        if (Theme.light) item(R.drawable.ic_bulb_off, "Toggle Dark Mode", Theme.text()) { Theme.toggle(this) }
-        else item(R.drawable.ic_bulb_on, "Toggle Light Mode", ACCENT) { Theme.toggle(this) }
-        item(R.drawable.ic_refresh, "Check for Updates", Theme.text()) { Updater.check(this) }
+        if (Theme.light) item(R.drawable.ic_bulb_off, "Toggle Dark Mode", Theme.text(), { Theme.toggle(this) })
+        else item(R.drawable.ic_bulb_on, "Toggle Light Mode", ACCENT, { Theme.toggle(this) })
+        val prefs = getSharedPreferences("ursa", MODE_PRIVATE)
+        val flickOn = prefs.getBoolean("flick", true)
+        // The switch stays open so the knob is seen moving; its slide is the Tabler pair, animated.
+        item(if (flickOn) R.drawable.ic_toggle_on else R.drawable.ic_toggle_off, "Flick Left/Right",
+            if (flickOn) ACCENT else Theme.text(), { mark ->
+                val on = !prefs.getBoolean("flick", true)
+                prefs.edit().putBoolean("flick", on).apply()
+                val avd = getDrawable(if (on) R.drawable.avd_toggle_on else R.drawable.avd_toggle_off) as android.graphics.drawable.AnimatedVectorDrawable
+                mark.setImageDrawable(avd)
+                mark.setColorFilter(if (on) ACCENT else Theme.text())
+                avd.start()
+            }, closes = false)
+        item(R.drawable.ic_refresh, "Check for Updates", Theme.text(), { Updater.check(this) })
         val at = IntArray(2).also { anchor.getLocationInWindow(it) }
         pop.showAtLocation(root, Gravity.TOP or Gravity.END, dpi(12), at[1])
     }

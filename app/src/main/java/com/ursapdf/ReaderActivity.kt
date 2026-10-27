@@ -32,6 +32,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
     private lateinit var top: LinearLayout
     private var spinner: View? = null
     private var strip: ThumbStrip? = null
+    private var scrubber: Scrubber? = null
     private var cropper: CropOverlay? = null
     private var eng: PdfEngine? = null
     private var state: DocState? = null
@@ -137,9 +138,10 @@ class ReaderActivity : Activity(), PdfView.Listener {
         root.setOnApplyWindowInsetsListener { _, ins ->
             insets = ins.safe()
             top.setPadding(insets[0], insets[1], insets[2], 0)
-            strip?.let {
+            strip?.setPadding(insets[0], 0, insets[2], 0)
+            scrubber?.let {
                 it.setPadding(insets[0], 0, insets[2], insets[3])
-                it.layoutParams.height = dpi(124) + insets[3]
+                it.layoutParams.height = dpi(32) + insets[3]
                 it.requestLayout()
             }
             ins
@@ -165,10 +167,20 @@ class ReaderActivity : Activity(), PdfView.Listener {
             setBackgroundColor(Theme.panel())
             isClickable = true
             visibility = View.INVISIBLE
-            setPadding(insets[0], 0, insets[2], insets[3])
+            setPadding(insets[0], 0, insets[2], 0)
         }
         strip = st
-        bottom.addView(st, LinearLayout.LayoutParams(MATCH_PARENT, dpi(124) + insets[3]))
+        bottom.addView(st, LinearLayout.LayoutParams(MATCH_PARENT, dpi(120)))
+        val sc = Scrubber(this, e.pageCount) { p ->
+            pdf.jumpTo(p)
+            strip?.centerOn(p)
+        }.apply {
+            setBackgroundColor(Theme.panel())
+            setPadding(insets[0], 0, insets[2], insets[3])
+        }
+        scrubber = sc
+        bottom.addView(sc, LinearLayout.LayoutParams(MATCH_PARENT, dpi(32) + insets[3]))
+        pdf.flick = getSharedPreferences("ursa", MODE_PRIVATE).getBoolean("flick", true)
         updatePill()
         Store.put(this, s)
     }
@@ -186,6 +198,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
         val e = eng ?: return
         badge.text = "Page ${pdf.currentPage + 1} of ${e.pageCount}"
         strip?.current = pdf.currentPage
+        scrubber?.current = pdf.currentPage
     }
 
     override fun onPageChanged(page: Int) = updatePill()

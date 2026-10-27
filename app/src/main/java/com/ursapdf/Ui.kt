@@ -16,7 +16,6 @@ import android.widget.TextView
 
 const val ACCENT = 0xFFFFB300.toInt()
 const val BG = 0xFF121212.toInt()
-const val PANEL = 0xE0181818.toInt()
 
 fun Context.dp(v: Float): Float = v * resources.displayMetrics.density
 fun Context.dpi(v: Int): Int = (v * resources.displayMetrics.density + 0.5f).toInt()

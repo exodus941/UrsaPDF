@@ -1,8 +1,12 @@
 # Third-party notices
 
+## Five by Five, by jeti
+
+The "PDF" lettering in the launcher icon (`app/src/main/res/drawable/ic_bear.xml`) is drawn from the Five by Five pixel font by jeti, https://fontenddev.com/fonts/five-by-five/, licensed under CC BY 4.0, https://creativecommons.org/licenses/by/4.0/. The glyphs were copied as pixel rectangles; the font file is not shipped.
+
 ## Tabler Icons 3.19.0
 
-The UI icons in `app/src/main/res/drawable/ic_*.xml` (except `ic_bear.xml`) are converted from Tabler Icons, https://tabler.io/icons.
+The UI icons in `app/src/main/res/drawable/ic_*.xml` (except `ic_bear.xml`) and the toggle animations `avd_toggle_*.xml` are converted from Tabler Icons, https://tabler.io/icons.
 
 ```
 MIT License

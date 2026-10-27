@@ -102,6 +102,25 @@ class PdfEngine private constructor(private val pfd: ParcelFileDescriptor, priva
         Thread(::loop, "ursa-render").apply { priority = Thread.NORM_PRIORITY + 1; start() }
     }
 
+    // Thumbnail box. The strip and the fast flip share these bitmaps, so one size for both.
+    private val density = ctx.resources.displayMetrics.density
+    val thumbW = 56 * density
+    val thumbMaxH = 80 * density
+
+    /** Thumbnail size of page [i] under the current crop: width to height. */
+    fun thumbSize(i: Int): Pair<Float, Float> {
+        val aw = pw[i] * crop.width()
+        val ah = ph[i] * crop.height()
+        val s = kotlin.math.min(thumbW / aw, thumbMaxH / ah)
+        return Pair(aw * s, ah * s)
+    }
+
+    fun thumbReq(i: Int): Req {
+        val (w, h) = thumbSize(i)
+        val s = w / (pw[i] * crop.width())
+        return req(THUMB, i, 0, 0, 0, kotlin.math.ceil(w).toInt().coerceAtLeast(1), kotlin.math.ceil(h).toInt().coerceAtLeast(1), s)
+    }
+
     fun req(kind: Int, page: Int, level: Int, tx: Int, ty: Int, w: Int, h: Int, scale: Float, x: Float = 0f, y: Float = 0f) =
         if (kind == FULL) Req(key(kind, page, level, tx, ty), gen, page, w, h, scale, x, y, 0f, 0f)
         else Req(key(kind, page, level, tx, ty), gen, page, w, h, scale, x, y, crop.left, crop.top)

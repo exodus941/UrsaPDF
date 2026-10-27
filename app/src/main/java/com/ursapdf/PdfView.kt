@@ -76,6 +76,15 @@ class PdfView(ctx: Context) : View(ctx) {
     private val swipeMin = ctx.dp(60f)
     private val flingMin = ctx.dp(400f)
 
+    /** Hard flick: fast AND long. A normal page swipe peaks near 1500 dp/s over a third of the width. */
+    var flick = true
+    private val flickSpeed = ctx.dp(2600f)
+    private val flickReach = 0.4f            // of the view width
+    private val flickDp = ctx.resources.displayMetrics.density
+    private var flipAnim: ValueAnimator? = null
+    private var flipTarget = -1
+    private var stoppedFlip = false
+
     private val bmpPaint = Paint(Paint.FILTER_BITMAP_FLAG)
     private val white = Paint().apply { color = Color.WHITE }
     private val dst = RectF()
@@ -125,6 +134,7 @@ class PdfView(ctx: Context) : View(ctx) {
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
         turnAnim?.cancel()
+        flipAnim?.cancel()
         eng?.listeners?.remove(onRendered)
     }
 
@@ -224,6 +234,48 @@ class PdfView(ctx: Context) : View(ctx) {
         }
     }
 
+    /**
+     * Rapid flip after a hard flick. Pages to travel grow with speed: 3 at the
+     * threshold, one more per 120 dp/s, at most 80. It eases out like inertia and
+     * never runs past 2.5 s.
+     */
+    private fun startFlip(vx: Float) {
+        val step = width + gap
+        val start = currentPage - shift / step
+        val speed = abs(vx) / flickDp
+        val pages = (3 + (speed - flickSpeed / flickDp) / 120f).toInt().coerceIn(3, 80)
+        val dir = if (vx < 0) 1 else -1
+        val target = (Math.round(start) + dir * pages).coerceIn(0, n - 1)
+        if (target == currentPage && shift == 0f) return
+        val ms = (400 + abs(target - start) * 25).toLong().coerceAtMost(2500L)
+        flipTarget = target
+        flipAnim = ValueAnimator.ofFloat(start, target.toFloat()).apply {
+            duration = ms
+            interpolator = DecelerateInterpolator(2f)
+            addUpdateListener { setFlipPos(it.animatedValue as Float) }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                private var cancelled = false
+                override fun onAnimationCancel(a: android.animation.Animator) { cancelled = true }
+                override fun onAnimationEnd(a: android.animation.Animator) {
+                    flipTarget = -1
+                    if (!cancelled) setPage(target)
+                }
+            })
+            start()
+        }
+    }
+
+    /** Fractional page position: the floor page is current, the next one slides in beside it. */
+    private fun setFlipPos(pos: Float) {
+        val p = pos.toInt().coerceIn(0, n - 1)
+        if (p != currentPage) {
+            currentPage = p
+            listener?.onPageChanged(p)
+        }
+        shift = -(pos - p) * (width + gap)
+        invalidate()
+    }
+
     /** Finger moves the page; past the first or last page it moves at a third of the speed. */
     private fun dragTurn(dx: Float) {
         val next = shift - dx
@@ -285,7 +337,10 @@ class PdfView(ctx: Context) : View(ctx) {
             if (scaling) return true
             flung = true
             when (drag) {
-                Drag.TURN -> finishTurn(vx)
+                Drag.TURN -> {
+                    val reach = if (e1 != null) abs(e2.x - e1.x) else 0f
+                    if (flick && abs(vx) >= flickSpeed && reach >= width * flickReach) startFlip(vx) else finishTurn(vx)
+                }
                 Drag.VERTICAL -> if (abs(vy) > flingMin || abs(vDist) > swipeMin) listener?.onVerticalSwipe()
                 Drag.PAN -> {
                     val maxX = max(0f, pageW() - width).toInt()
@@ -299,7 +354,7 @@ class PdfView(ctx: Context) : View(ctx) {
         }
 
         override fun onSingleTapUp(e: MotionEvent): Boolean {
-            if (drag == Drag.NONE && shift == 0f) listener?.onTap(e.x, e.y)
+            if (drag == Drag.NONE && shift == 0f && !stoppedFlip) listener?.onTap(e.x, e.y)
             return true
         }
     })
@@ -308,8 +363,18 @@ class PdfView(ctx: Context) : View(ctx) {
         if (e.actionMasked == MotionEvent.ACTION_DOWN) {
             // A touch during a turn finishes it at once, so the next drag starts clean.
             turnAnim?.let { if (it.isRunning) it.end() }
+            // A touch during a flip stops it on the nearest page, like a hand on the book.
+            flipAnim?.let {
+                if (it.isRunning) {
+                    it.cancel()
+                    stoppedFlip = true
+                    val frac = -shift / (width + gap)
+                    setPage((currentPage + if (frac > 0.5f) 1 else 0).coerceIn(0, n - 1))
+                }
+            }
             scroller.forceFinished(true)
             drag = Drag.NONE; vDist = 0f; flung = false
+            if (flipAnim?.isRunning != true) stoppedFlip = false
         }
         scaleDet.onTouchEvent(e)
         gestures.onTouchEvent(e)
@@ -344,6 +409,16 @@ class PdfView(ctx: Context) : View(ctx) {
         val want = ArrayList<Req>()
         val tiles = ArrayList<Req>()
         val cur = currentPage
+        if (flipTarget >= 0) {
+            // Mid-flip: the landing page first, then cheap thumbnails along the way.
+            if (e.base.get(PdfEngine.key(PdfEngine.BASE, flipTarget)) == null) want += baseReq(e, flipTarget)
+            val dir = if (flipTarget >= cur) 1 else -1
+            for (k in 0..8) {
+                val p = cur + dir * k
+                if (p < 0 || p >= n) break
+                if (e.thumbs.get(PdfEngine.key(PdfEngine.THUMB, p)) == null) want += e.thumbReq(p)
+            }
+        }
 
         drawPage(canvas, e, cur, left() + shift, top(), zoom, want, tiles)
         val step = width + gap
@@ -365,7 +440,9 @@ class PdfView(ctx: Context) : View(ctx) {
         dst.set(x, y, x + dw[i] * z, y + dh[i] * z)
         val b = e.base.get(PdfEngine.key(PdfEngine.BASE, i))
         if (b != null) c.drawBitmap(b, null, dst, bmpPaint) else {
-            c.drawRect(dst, white)
+            // A thumbnail stretched over the page beats a blank sheet while it renders.
+            val t = e.thumbs.get(PdfEngine.key(PdfEngine.THUMB, i))
+            if (t != null) c.drawBitmap(t, null, dst, bmpPaint) else c.drawRect(dst, white)
             want += baseReq(e, i)
         }
         if (tiles == null || scaling || !scroller.isFinished || shift != 0f || z <= 1.05f) return

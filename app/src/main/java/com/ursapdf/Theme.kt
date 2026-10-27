@@ -29,13 +29,14 @@ object Theme {
     fun bg() = mix(DARK_BG, LIGHT_BG)
     fun text() = mix(0xFFFFFFFF.toInt(), 0xFF111111.toInt())
     fun sub() = mix(0xFF999999.toInt(), 0xFF555555.toInt())
-    fun panel() = mix(0xE0181818.toInt(), 0xF0F2F2F2.toInt())
+    // Opaque: a see-through panel lets page text show behind the thumbnails.
+    fun panel() = mix(0xFF181818.toInt(), 0xFFF2F2F2.toInt())
     fun popup() = mix(0xFF262626.toInt(), 0xFFFFFFFF.toInt())
     fun line() = mix(0xFF333333.toInt(), 0xFFD0D0D0.toInt())
     fun button() = mix(0xFF333333.toInt(), 0xFFE4E4E4.toInt())
     fun ripple() = mix(0x33FFFFFF, 0x22000000)
-    /** Accent as text or stroke: amber on dark, deep amber on light (still dark on e-ink). */
-    fun accentInk() = mix(ACCENT, 0xFF8A5200.toInt())
+    /** Accent as text or stroke: amber on dark, deep orange on light (3.67:1 on the panel). */
+    fun accentInk() = mix(ACCENT, 0xFFC26400.toInt())
     /** Reader backdrop around pages. */
     fun backdrop() = mix(0xFF2A2A2A.toInt(), 0xFFDDDDDD.toInt())
 

@@ -216,6 +216,8 @@ class ReaderActivity : Activity(), PdfView.Listener {
      * After a swipe or flick: fade the page pill in (250 ms), hold 0.625 s, fade out
      * (250 ms). A flick turns pages faster than that, so each turn restarts the hold.
      * The chrome already shows the same pill, so nothing flashes while it is up.
+     * The fades are linear: an ease-out curve reaches 80% opacity in the first 60 ms,
+     * so a 250 ms fade read as a pop.
      */
     override fun onTurned(page: Int) {
         val e = eng ?: return
@@ -223,12 +225,13 @@ class ReaderActivity : Activity(), PdfView.Listener {
         flash.text = "Page ${page + 1} of ${e.pageCount}"
         flash.removeCallbacks(hideFlash)
         flash.animate().cancel()
-        flash.animate().alpha(1f).setDuration((250 * (1 - flash.alpha)).toLong()).setInterpolator(easeOut).start()
+        flash.animate().alpha(1f).setDuration((250 * (1 - flash.alpha)).toLong()).setInterpolator(linear).start()
         flash.postDelayed(hideFlash, 250L + 625L)
     }
 
+    private val linear = android.view.animation.LinearInterpolator()
     private val hideFlash = Runnable {
-        flash.animate().alpha(0f).setDuration(250).setInterpolator(easeIn).start()
+        flash.animate().alpha(0f).setDuration(250).setInterpolator(linear).start()
     }
 
     /** Runs on every frame of a theme change. */

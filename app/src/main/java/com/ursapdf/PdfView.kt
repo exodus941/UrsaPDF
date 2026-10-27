@@ -78,19 +78,25 @@ class PdfView(ctx: Context) : View(ctx) {
     private val flingMin = ctx.dp(400f)
 
     /**
-     * Hard flick: fast AND far, judged on two tiers. A deliberate page swipe on the
-     * emulator moved about 1100 dp/s. A long flick needs 2200 dp/s over a quarter
-     * of the width; a short snap needs 3200 dp/s over an eighth. The reach is
-     * scaled down near the edge the finger moves toward, which leaves no room.
+     * Hard flick: fast AND far, judged on two tiers. A casual thumb swipe on a real
+     * phone releases at 2000 to 3000 dp/s, so 2200 fired on ordinary turns. A long
+     * flick needs 3500 dp/s over a quarter of the width; a short snap needs 5000 dp/s
+     * over an eighth. The reach is scaled down near the edge the finger moves
+     * toward, which leaves no room. The platform caps fling speed at 8000 dp/s.
      */
     var flick = true
-    private val flickSpeed = ctx.dp(2200f)
-    private val snapSpeed = ctx.dp(3200f)
+    private val flickSpeed = ctx.dp(3500f)
+    private val snapSpeed = ctx.dp(5000f)
     private val flickReach = 0.25f           // of the view width
     private val snapReach = 0.125f
     private val flickDp = ctx.resources.displayMetrics.density
     private var flipAnim: ValueAnimator? = null
     private var flipTarget = -1
+    private var zoomAnim: ValueAnimator? = null
+    private var edgeDir = 0                  // +1 next, -1 previous: a push past a zoomed page's edge
+    private var downX = 0f
+    private var downAtRight = false
+    private var downAtLeft = false
     private var stoppedFlip = false
 
     private val bmpPaint = Paint(Paint.FILTER_BITMAP_FLAG)
@@ -131,6 +137,13 @@ class PdfView(ctx: Context) : View(ctx) {
     }
 
     override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
+        // A flick started at a side edge would be taken as the system Back gesture.
+        // Android lets an app keep up to 200 dp of height per edge; keep the middle.
+        val band = context.dpi(200); val edge = context.dpi(48); val top = (h - band) / 2
+        systemGestureExclusionRects = listOf(
+            android.graphics.Rect(0, top, edge, top + band),
+            android.graphics.Rect(w - edge, top, w, top + band),
+        )
         if (pending == null && fit.isNotEmpty()) {
             val p = position()
             pending = floatArrayOf(p[0], p[1], p[2], zoom)
@@ -143,6 +156,7 @@ class PdfView(ctx: Context) : View(ctx) {
         super.onDetachedFromWindow()
         turnAnim?.cancel()
         flipAnim?.cancel()
+        zoomAnim?.cancel()
         eng?.listeners?.remove(onRendered)
     }
 
@@ -246,14 +260,14 @@ class PdfView(ctx: Context) : View(ctx) {
 
     /**
      * Rapid flip after a hard flick. Pages to travel grow with speed: 3 at the
-     * threshold, one more per 120 dp/s, at most 80. It eases out like inertia and
+     * threshold, one more per 56 dp/s, so 80 at the 8000 dp/s cap. It eases out like inertia and
      * never runs past 2.5 s.
      */
     private fun startFlip(vx: Float) {
         val step = width + gap
         val start = currentPage - shift / step
         val speed = abs(vx) / flickDp
-        val pages = (3 + (speed - flickSpeed / flickDp) / 120f).toInt().coerceIn(3, 80)
+        val pages = (3 + (speed - flickSpeed / flickDp) / 56f).toInt().coerceIn(3, 80)
         val dir = if (vx < 0) 1 else -1
         val target = (Math.round(start) + dir * pages).coerceIn(0, n - 1)
         if (target == currentPage && shift == 0f) return
@@ -341,6 +355,15 @@ class PdfView(ctx: Context) : View(ctx) {
             if (drag == Drag.NONE) {
                 val tx = if (e1 != null) e2.x - e1.x else -dx
                 val ty = if (e1 != null) e2.y - e1.y else -dy
+                if (zoom > 1.01f && abs(tx) >= abs(ty)) {
+                    // Pushing outward from the edge the page already rested on turns it.
+                    val maxX = max(0f, pageW() - width)
+                    edgeDir = when {
+                        tx < 0 && downAtRight && sx >= maxX - 1 -> 1
+                        tx > 0 && downAtLeft && sx <= 1 -> -1
+                        else -> 0
+                    }
+                }
                 drag = when {
                     zoom > 1.01f -> Drag.PAN
                     // A thumb flick arcs, so sideways wins up to about 59 degrees.
@@ -363,7 +386,8 @@ class PdfView(ctx: Context) : View(ctx) {
             when (drag) {
                 Drag.TURN -> if (flick && isHardFlick(e1, e2, vx)) startFlip(vx) else finishTurn(vx)
                 Drag.VERTICAL -> if (abs(vy) > flingMin || abs(vDist) > swipeMin) listener?.onVerticalSwipe()
-                Drag.PAN -> {
+                // A flick from the edge counts as a plain swipe: one page.
+                Drag.PAN -> if (edgeDir != 0 && abs(vx) > abs(vy) && abs(vx) > flingMin && (vx < 0) == (edgeDir > 0)) edgeTurn(edgeDir) else {
                     val maxX = max(0f, pageW() - width).toInt()
                     val maxY = max(0f, pageH() - height).toInt()
                     scroller.fling(sx.toInt(), sy.toInt(), -vx.toInt(), -vy.toInt(), 0, maxX, 0, maxY)
@@ -374,11 +398,58 @@ class PdfView(ctx: Context) : View(ctx) {
             return true
         }
 
+        // At fit a tap acts at once. Zoomed, it waits to see whether it is half of a
+        // double-tap, which zooms out to fit.
         override fun onSingleTapUp(e: MotionEvent): Boolean {
-            if (drag == Drag.NONE && shift == 0f && !stoppedFlip) listener?.onTap(e.x, e.y)
+            if (zoom <= 1.01f) tap(e)
             return true
         }
+
+        override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+            if (zoom > 1.01f) tap(e)
+            return true
+        }
+
+        override fun onDoubleTap(e: MotionEvent): Boolean {
+            if (zoom > 1.01f) zoomToFit(e.x, e.y)
+            return true
+        }
+
+        private fun tap(e: MotionEvent) {
+            if (drag == Drag.NONE && shift == 0f && !stoppedFlip) listener?.onTap(e.x, e.y)
+        }
     })
+
+    /** Zoom back to fit over 250 ms, ease-out, about the tapped point. */
+    private fun zoomToFit(fx: Float, fy: Float) {
+        zoomAnim?.cancel()
+        scroller.forceFinished(true)
+        scaling = true  // no tiles for the zoom levels passed on the way
+        zoomAnim = ValueAnimator.ofFloat(zoom, 1f).apply {
+            duration = 250
+            interpolator = android.view.animation.PathInterpolator(0f, 0f, 0.2f, 1f)
+            addUpdateListener { zoomBy((it.animatedValue as Float) / zoom, fx, fy) }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(a: android.animation.Animator) { scaling = false; invalidate() }
+            })
+            start()
+        }
+    }
+
+    /** From a zoomed page's edge: the neighbour arrives at fit, sliding in like a turn. */
+    private fun edgeTurn(dir: Int) {
+        val target = currentPage + dir
+        if (target < 0 || target >= n) return
+        setPage(target, turned = true)
+        val step = width + gap
+        shift = dir * step
+        turnAnim = ValueAnimator.ofFloat(shift, 0f).apply {
+            duration = TURN_MS
+            interpolator = DecelerateInterpolator()
+            addUpdateListener { shift = it.animatedValue as Float; invalidate() }
+            start()
+        }
+    }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
         if (e.actionMasked == MotionEvent.ACTION_DOWN) {
@@ -394,7 +465,11 @@ class PdfView(ctx: Context) : View(ctx) {
                 }
             }
             scroller.forceFinished(true)
-            drag = Drag.NONE; vDist = 0f; flung = false
+            drag = Drag.NONE; vDist = 0f; flung = false; edgeDir = 0
+            val maxX = max(0f, pageW() - width)
+            downX = e.x
+            downAtRight = zoom > 1.01f && sx >= maxX - 1
+            downAtLeft = zoom > 1.01f && sx <= 1
             if (flipAnim?.isRunning != true) stoppedFlip = false
         }
         scaleDet.onTouchEvent(e)
@@ -402,6 +477,7 @@ class PdfView(ctx: Context) : View(ctx) {
         if (e.actionMasked == MotionEvent.ACTION_UP || e.actionMasked == MotionEvent.ACTION_CANCEL) {
             if (!flung) when (drag) {
                 Drag.TURN -> finishTurn(0f)
+                Drag.PAN -> if (edgeDir != 0 && (downX - e.x) * edgeDir > swipeMin) edgeTurn(edgeDir)
                 Drag.VERTICAL -> if (abs(vDist) > swipeMin) listener?.onVerticalSwipe()
                 else -> {}
             }

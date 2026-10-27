@@ -18,7 +18,6 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-      - uses: android-actions/setup-android@v3
       - name: Build
         env:
           KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}

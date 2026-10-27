@@ -110,6 +110,24 @@ class HomeActivity : Activity() {
         docs = Store.all(this)
         (list.adapter as BaseAdapter).notifyDataSetChanged()
         Updater.resumed(this, home = true)
+        fillSizes()
+    }
+
+    /** Entries saved before sizes were kept: look them up off the main thread. */
+    private fun fillSizes() {
+        val missing = docs.filter { it.size <= 0 }.map { it.uri }
+        if (missing.isEmpty()) return
+        val app = applicationContext
+        Thread {
+            val found = missing.associateWith { Store.sizeOf(app, it) }.filterValues { it > 0 }
+            if (found.isEmpty()) return@Thread
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                Store.setSizes(app, found)
+                docs = Store.all(app)
+                (list.adapter as BaseAdapter).notifyDataSetChanged()
+            }
+        }.start()
     }
 
     override fun onPause() {
@@ -158,8 +176,11 @@ class HomeActivity : Activity() {
             val now = System.currentTimeMillis()
             val ago = if (now - d.opened < DateUtils.MINUTE_IN_MILLIS) "just now"
                 else DateUtils.getRelativeTimeSpanString(d.opened, now, DateUtils.MINUTE_IN_MILLIS)
-            (row.getChildAt(1) as TextView).text =
-                if (d.pages > 0) "Page ${d.page + 1} of ${d.pages}  ·  $ago" else "$ago"
+            val parts = ArrayList<CharSequence>()
+            if (d.pages > 0) parts += "Page ${d.page + 1} of ${d.pages}"
+            parts += ago
+            if (d.size > 0) parts += android.text.format.Formatter.formatShortFileSize(this@HomeActivity, d.size)
+            (row.getChildAt(1) as TextView).text = parts.joinToString("  ·  ")
             paintRow(row)
             return row
         }

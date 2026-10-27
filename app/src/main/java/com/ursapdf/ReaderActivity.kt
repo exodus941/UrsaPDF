@@ -163,6 +163,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
         val key = uri.toString()
         val s = Store.get(this, key) ?: DocState(key, displayName())
         s.pages = e.pageCount
+        s.size = Store.sizeOf(this, key)
         s.opened = System.currentTimeMillis()
         state = s
         e.crop.set(s.crop)

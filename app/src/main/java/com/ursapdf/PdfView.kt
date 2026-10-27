@@ -79,23 +79,26 @@ class PdfView(ctx: Context) : View(ctx) {
     private val flingMin = ctx.dp(400f)
 
     /**
-     * Hard flick: fast AND far, judged on two tiers. Tuned on a real phone to sit
-     * halfway between 1.2.0 (2600 dp/s over 40%, no snap: missed hard flicks) and
-     * 1.3.3 (3500 dp/s over 25%, snap 5000 over 12.5%: fired on swipes). A long
-     * flick needs 3500 dp/s over 32.5% of the width; a short snap needs 6500 dp/s
-     * over 20%. The reach shrinks to at most 75% near the edge the finger moves
-     * toward. The platform caps fling speed at 8000 dp/s.
+     * Hard flick: fast AND far. The user judged 1.2.0's rule right after trying
+     * three stricter and looser ones: 16.25 in/s (2600 dp/s at the default display
+     * size) over 40% of the width. 1.2.0 missed flicks started at a side edge, but
+     * the system Back gesture took those, fixed by the exclusion band below.
+     *
+     * Speed is in physical inches, from the panel's real pixel density (xdpi), so
+     * the display-size setting cannot move it. Thresholds in dp did move: a larger
+     * display size raises the density and so raised the bar in pixels.
      */
     var flick = true
-    private val flickSpeed = ctx.dp(3500f)
-    private val snapSpeed = ctx.dp(6500f)
-    private val flickReach = 0.325f          // of the view width
-    private val snapReach = 0.20f
-    private val flickDp = ctx.resources.displayMetrics.density
+    private val pxPerInch = ctx.resources.displayMetrics.let { m ->
+        m.xdpi.takeIf { it in 100f..1000f } ?: m.densityDpi.toFloat()  // some phones misreport xdpi
+    }
+    private val flickInches = 16.25f         // per second
+    private val flickReach = 0.40f           // of the view width
     private var flipAnim: ValueAnimator? = null
     private var flipTarget = -1
     private var zoomAnim: ValueAnimator? = null
     private var edgeDir = 0                  // +1 next, -1 previous: a push past a zoomed page's edge
+    private var dragZoomed = false           // this touch zoomed by pinch or quick scale
     private var downX = 0f
     private var downAtRight = false
     private var downAtLeft = false
@@ -262,14 +265,14 @@ class PdfView(ctx: Context) : View(ctx) {
 
     /**
      * Rapid flip after a hard flick. Pages to travel grow with speed: 3 at the
-     * threshold, one more per 56 dp/s, so 80 at the 8000 dp/s cap. It eases out like inertia and
-     * never runs past 2.5 s.
+     * threshold, one more per 0.75 in/s (1.2.0's 120 dp/s), at most 80. It eases out
+     * like inertia and never runs past 2.5 s.
      */
     private fun startFlip(vx: Float) {
         val step = width + gap
         val start = currentPage - shift / step
-        val speed = abs(vx) / flickDp
-        val pages = (3 + (speed - flickSpeed / flickDp) / 56f).toInt().coerceIn(3, 80)
+        val inches = abs(vx) / pxPerInch
+        val pages = (3 + (inches - flickInches) / 0.75f).toInt().coerceIn(3, 80)
         val dir = if (vx < 0) 1 else -1
         val target = (Math.round(start) + dir * pages).coerceIn(0, n - 1)
         if (target == currentPage && shift == 0f) return
@@ -294,13 +297,7 @@ class PdfView(ctx: Context) : View(ctx) {
 
     private fun isHardFlick(e1: MotionEvent?, e2: MotionEvent, vx: Float): Boolean {
         if (e1 == null) return false
-        val reach = abs(e2.x - e1.x)
-        // Room the finger had: from where it started to the edge it moved toward.
-        val room = if (vx < 0) e1.x else width - e1.x
-        val scale = (room / (width * 0.6f)).coerceIn(0.75f, 1f)
-        val v = abs(vx)
-        return (v >= flickSpeed && reach >= width * flickReach * scale) ||
-            (v >= snapSpeed && reach >= width * snapReach * scale)
+        return abs(vx) / pxPerInch >= flickInches && abs(e2.x - e1.x) >= width * flickReach
     }
 
     /** Fractional page position: the floor page is current, the next one slides in beside it. */
@@ -328,6 +325,8 @@ class PdfView(ctx: Context) : View(ctx) {
     private val scaleDet = ScaleGestureDetector(ctx, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
         override fun onScaleBegin(d: ScaleGestureDetector): Boolean {
             scaling = true
+            dragZoomed = true  // also true for a two-finger pinch; only read on a double-tap
+            zoomAnim?.cancel()
             scroller.forceFinished(true)
             if (shift != 0f) { shift = 0f; drag = Drag.NONE }
             lastFx = d.focusX; lastFy = d.focusY
@@ -347,7 +346,9 @@ class PdfView(ctx: Context) : View(ctx) {
             drag = Drag.PAN  // the leftover finger pans; it must not start a turn
             invalidate()
         }
-    }).apply { isQuickScaleEnabled = false }
+    // Quick scale: double-tap, hold, and drag down to zoom in or up to zoom out,
+    // about the tapped point.
+    }).apply { isQuickScaleEnabled = true }
 
     private val gestures = GestureDetector(ctx, object : GestureDetector.SimpleOnGestureListener() {
         override fun onDown(e: MotionEvent) = true
@@ -368,8 +369,8 @@ class PdfView(ctx: Context) : View(ctx) {
                 }
                 drag = when {
                     zoom > 1.01f -> Drag.PAN
-                    // A thumb flick arcs, so sideways wins up to about 52 degrees.
-                    abs(tx) * 1.28f >= abs(ty) -> Drag.TURN
+                    // Sideways wins up to 45 degrees, as in 1.2.0.
+                    abs(tx) >= abs(ty) -> Drag.TURN
                     else -> Drag.VERTICAL
                 }
             }
@@ -401,14 +402,19 @@ class PdfView(ctx: Context) : View(ctx) {
         }
 
         // A tap waits out the double-tap window (300 ms): a double-tap zooms in at fit
-        // and out to fit when zoomed.
+        // and out to fit when zoomed. It acts when the second tap lifts, and only if
+        // the finger did not drag: a held second tap that drags is quick scale.
         override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
             tap(e)
             return true
         }
 
-        override fun onDoubleTap(e: MotionEvent): Boolean {
-            if (zoom > 1.01f) zoomToFit(e.x, e.y) else zoomInAt(e.x, e.y)
+        override fun onDoubleTap(e: MotionEvent) = true
+
+        override fun onDoubleTapEvent(e: MotionEvent): Boolean {
+            if (e.actionMasked == MotionEvent.ACTION_UP && !dragZoomed) {
+                if (zoom > 1.01f) zoomToFit(e.x, e.y) else zoomInAt(e.x, e.y)
+            }
             return true
         }
 
@@ -493,7 +499,7 @@ class PdfView(ctx: Context) : View(ctx) {
                 }
             }
             scroller.forceFinished(true)
-            drag = Drag.NONE; vDist = 0f; flung = false; edgeDir = 0
+            drag = Drag.NONE; vDist = 0f; flung = false; edgeDir = 0; dragZoomed = false
             val maxX = max(0f, pageW() - width)
             downX = e.x
             downAtRight = zoom > 1.01f && sx >= maxX - 1

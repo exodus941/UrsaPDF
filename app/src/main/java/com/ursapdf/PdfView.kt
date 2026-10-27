@@ -259,6 +259,7 @@ class PdfView(ctx: Context) : View(ctx) {
         if (target == currentPage && shift == 0f) return
         val ms = (400 + abs(target - start) * 25).toLong().coerceAtMost(2500L)
         flipTarget = target
+        listener?.onTurned(currentPage)  // the page pill comes up as the flick starts
         flipAnim = ValueAnimator.ofFloat(start, target.toFloat()).apply {
             duration = ms
             interpolator = DecelerateInterpolator(2f)

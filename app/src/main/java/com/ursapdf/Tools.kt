@@ -31,6 +31,7 @@ class Field(
 interface Tools {
     val canSearch: Boolean
     val live: Boolean
+    /** True when some page has a field a person can change; a form flag alone is not enough. */
     fun isForm(cb: (Boolean) -> Unit)
     /** Starts a search for [q] (null stops one). Matches arrive page by page. */
     fun search(q: String?, onMatches: (page: Int, rects: List<List<RectF>>) -> Unit, onDone: () -> Unit)
@@ -56,8 +57,18 @@ private class SystemTools(private val e: PdfEngine) : Tools {
     override val canSearch = true
     override val live = true
 
-    override fun isForm(cb: (Boolean) -> Unit) =
-        cb(e.formType == PdfRenderer.PDF_FORM_TYPE_ACRO_FORM || e.formType == PdfRenderer.PDF_FORM_TYPE_XFA_FOREGROUND)
+    override fun isForm(cb: (Boolean) -> Unit) {
+        if (e.formType != PdfRenderer.PDF_FORM_TYPE_ACRO_FORM && e.formType != PdfRenderer.PDF_FORM_TYPE_XFA_FOREGROUND) { cb(false); return }
+        // One page per task, queued from the main thread, so renders get the worker in between.
+        fun page(i: Int) {
+            if (i >= e.pageCount) { cb(false); return }
+            e.run {
+                val hit = try { read(i).any { it.editable } } catch (t: Throwable) { false }
+                e.post { if (hit) cb(true) else page(i + 1) }
+            }
+        }
+        page(0)
+    }
 
     override fun search(q: String?, onMatches: (Int, List<List<RectF>>) -> Unit, onDone: () -> Unit) {
         val g = e.search(q)
@@ -134,7 +145,15 @@ private class EngineTools(private val e: PdfEngine) : Tools {
 
     override fun isForm(cb: (Boolean) -> Unit) = bg {
         val t = Pdfium.formType(doc)
-        e.post { cb(t == 1 || t == 3) }  // FORMTYPE_ACRO_FORM, FORMTYPE_XFA_FOREGROUND
+        if (t != 1 && t != 3) { e.post { cb(false) }; return@bg }  // FORMTYPE_ACRO_FORM, FORMTYPE_XFA_FOREGROUND
+        // One page per message, so a search or an edit is never stuck behind it.
+        fun page(i: Int) {
+            if (doc == 0L) return
+            if (i >= e.pageCount) { e.post { cb(false) }; return }
+            val hit = try { read(i).any { it.editable } } catch (t: Throwable) { false }
+            if (hit) e.post { cb(true) } else h.post { page(i + 1) }
+        }
+        page(0)
     }
 
     override fun search(q: String?, onMatches: (Int, List<List<RectF>>) -> Unit, onDone: () -> Unit) {

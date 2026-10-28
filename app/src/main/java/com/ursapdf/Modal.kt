@@ -22,7 +22,8 @@ import android.widget.TextView
  * undoes both over 250 ms. Blur needs Android 12; older phones only darken.
  * Tapping outside the card or pressing Back cancels.
  */
-class Modal(private val a: Activity, private val host: FrameLayout, private val behind: View) {
+/** [clearTop]: how far down the screen's own top bar reaches; the card centres below it. */
+class Modal(private val a: Activity, private val host: FrameLayout, private val behind: View, private val clearTop: () -> Int = { 0 }) {
 
     private var overlay: FrameLayout? = null
     private var anim: ValueAnimator? = null
@@ -113,18 +114,25 @@ class Modal(private val a: Activity, private val host: FrameLayout, private val 
         o.addView(card, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.CENTER).apply {
             leftMargin = a.dpi(32); rightMargin = a.dpi(32)
         })
-        // The window draws behind the keyboard, so nothing makes room for it: the card
-        // rises by half the keyboard's height to centre in what is left, and follows the
-        // keyboard frame by frame as it opens and closes. Android 10 and older resize the
-        // window for the keyboard themselves.
+        // The card centres between the screen's top bar and the keyboard (or the bottom).
+        // On Android 11 and newer the window draws behind the keyboard, so the card is
+        // moved by the keyboard's height, following it frame by frame as it opens and
+        // closes; Android 10 and older shrink the window for the keyboard themselves.
+        var kb = 0
+        fun place() {
+            val top = clearTop().toFloat()
+            val target = (top + o.height - kb) / 2f              // centre of the free band
+            val dy = target - o.height / 2f                         // the card starts centred
+            // Never above the bar: keep a 16 dp gap over the card.
+            val minDy = top + a.dp(16f) - (o.height - card.height) / 2f
+            card.translationY = maxOf(dy, minDy)
+        }
+        o.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> place() }
+        card.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> place() }
         if (Build.VERSION.SDK_INT >= 30) {
             fun lift(ins: android.view.WindowInsets) {
-                val kb = ins.getInsets(android.view.WindowInsets.Type.ime()).bottom
-                val bars = ins.getInsets(android.view.WindowInsets.Type.systemBars()).bottom
-                val up = (kb - bars).coerceAtLeast(0) / 2f
-                // Never past the top: keep a 16 dp margin above the card.
-                val room = (o.height - card.height) / 2f - a.dp(16f)
-                card.translationY = -up.coerceAtMost(room.coerceAtLeast(0f))
+                kb = ins.getInsets(android.view.WindowInsets.Type.ime()).bottom
+                place()
             }
             o.setOnApplyWindowInsetsListener { _, ins -> lift(ins); ins }
             o.setWindowInsetsAnimationCallback(object : android.view.WindowInsetsAnimation.Callback(DISPATCH_MODE_CONTINUE_ON_SUBTREE) {

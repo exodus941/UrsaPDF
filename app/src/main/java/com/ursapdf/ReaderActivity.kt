@@ -204,7 +204,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
             ins
         }
         setContentView(root)
-        modal = Modal(this, root, pdf)
+        modal = Modal(this, root, pdf) { if (uiShown) top.height else 0 }
         menu = Menu(this, root)
         // A PDF opened from another app skips the home list, so the reader blocks too.
         gate = LibraryGate(this, root) { eng?.let { setupTools(it) } }

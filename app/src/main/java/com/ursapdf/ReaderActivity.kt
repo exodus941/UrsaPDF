@@ -337,9 +337,8 @@ class ReaderActivity : Activity(), PdfView.Listener {
     override fun onTap(x: Float, y: Float) {
         if (eng == null) return
         if (searching) { keyboard(false); return }
-        if (uiShown) { hideUi(); return }
-        val w = pdf.width; val h = pdf.height
-        if (x > w * 0.25f && x < w * 0.75f && y > h * 0.25f && y < h * 0.75f) showUi()
+        // Taps never turn pages, so a tap anywhere toggles the chrome.
+        if (uiShown) hideUi() else showUi()
     }
 
     override fun onVerticalSwipe() {

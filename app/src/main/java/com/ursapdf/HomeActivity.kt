@@ -134,23 +134,11 @@ class HomeActivity : Activity() {
         setContentView(frame)
         modal = Modal(this, frame, root)
         gate = LibraryGate(this, frame) {}
-        checkLibraries()
+        // Phones without built-in search and forms: download the engine on first launch
+        // (blocking), and check on every launch whether a newer one is published.
+        gate.check(update = true)
         Theme.listeners += onTheme
         applyTheme()
-    }
-
-    /**
-     * Phones without built-in search and forms: download the engine on first launch
-     * (blocking), and check on every launch whether a newer one is published.
-     */
-    private fun checkLibraries() {
-        if (!Libraries.needed) return
-        if (!Libraries.load(this)) { gate.start(); return }
-        val app = applicationContext
-        Thread {
-            val newer = try { Libraries.latest()?.takeIf { it.version > Libraries.installedVersion(app) } } catch (e: Exception) { null }
-            if (newer != null) runOnUiThread { if (!isDestroyed) gate.start(newer) }
-        }.start()
     }
 
     private fun iconButton(icon: Int, name: String, act: () -> Unit) = ImageView(this).apply {

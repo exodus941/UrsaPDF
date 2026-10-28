@@ -47,14 +47,16 @@ fun Window.edgeToEdge() {
     }
 }
 
+/** Hide the status bar only; the navigation bar always stays up. */
 @Suppress("DEPRECATION")
 fun Window.immersive() {
     edgeToEdge()
     if (Build.VERSION.SDK_INT >= 30) insetsController?.let {
-        it.hide(WindowInsets.Type.systemBars())
+        it.hide(WindowInsets.Type.statusBars())
+        it.show(WindowInsets.Type.navigationBars())
         it.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
     } else decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
-        View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+        View.SYSTEM_UI_FLAG_FULLSCREEN or
         View.SYSTEM_UI_FLAG_LAYOUT_STABLE or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
         View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
 }

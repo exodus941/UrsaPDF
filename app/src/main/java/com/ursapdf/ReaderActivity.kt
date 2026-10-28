@@ -63,6 +63,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
     private var tools: Tools? = null
     private lateinit var editBtn: ImageView
     private lateinit var modal: Modal
+    private lateinit var gate: LibraryGate
     private val fieldsNow = HashMap<Int, List<Field>>()       // as edited
     private val fieldsFirst = HashMap<Int, List<Field>>()     // as opened, to tell what changed
     private var dirty = false
@@ -201,6 +202,9 @@ class ReaderActivity : Activity(), PdfView.Listener {
         }
         setContentView(root)
         modal = Modal(this, root, pdf)
+        // A PDF opened from another app skips the home list, so the reader blocks too.
+        gate = LibraryGate(this, root) { eng?.let { setupTools(it) } }
+        gate.check(update = false)
         // Android 10 and older give a full-screen window no keyboard inset; the part of the
         // window the keyboard leaves visible is the measure that works there.
         if (android.os.Build.VERSION.SDK_INT < 30) root.viewTreeObserver.addOnGlobalLayoutListener {
@@ -244,8 +248,14 @@ class ReaderActivity : Activity(), PdfView.Listener {
         }
         scrubber = sc
         bottom.addView(sc, LinearLayout.LayoutParams(MATCH_PARENT, dpi(32) + insets[3]))
-        // Older phones: the engine is in place once the home list has downloaded it.
-        if (!Features.builtIn) Libraries.load(this)
+        // Older phones without the engine yet: the gate sets the tools up once it is in.
+        if (!gate.showing) setupTools(e)
+        applyTheme()
+        updatePill()
+        Store.put(this, s)
+    }
+
+    private fun setupTools(e: PdfEngine) {
         val t = Tools.of(e)
         tools = t
         searchBtn.visibility = if (t?.canSearch == true) View.VISIBLE else View.GONE
@@ -254,9 +264,6 @@ class ReaderActivity : Activity(), PdfView.Listener {
             isForm = form
             if (form && !t.live) loadFields(pdf.currentPage)
         }
-        applyTheme()
-        updatePill()
-        Store.put(this, s)
     }
 
     private fun displayName(): String {
@@ -730,6 +737,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         when {
+            gate.showing -> {}  // the library download cannot be dismissed
             modal.showing -> modal.cancel()
             cropper != null -> closeCropper(null)
             // While viewing results, Back steps back one result; from the first, it closes.

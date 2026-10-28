@@ -12,9 +12,9 @@ import android.widget.ProgressBar
 import android.widget.TextView
 
 /**
- * Full-screen "Downloading required libraries" over the home list, on phones that need
- * the engine: first launch, and whenever a newer engine is published. It cannot be
- * dismissed; a failed download offers Retry.
+ * Full-screen "Downloading required libraries" over the home list or the reader, on phones
+ * that need the engine: first launch, and whenever a newer engine is published. It cannot
+ * be dismissed; a failed download offers Retry.
  */
 class LibraryGate(private val a: Activity, private val host: FrameLayout, private val onReady: () -> Unit) {
 
@@ -23,6 +23,21 @@ class LibraryGate(private val a: Activity, private val host: FrameLayout, privat
     private lateinit var status: TextView
     private lateinit var retry: TextView
     val showing get() = view != null
+
+    /**
+     * Load the engine, or show the gate until it is downloaded. With [update], also look
+     * for a newer engine in the background and show the gate to fetch it.
+     */
+    fun check(update: Boolean) {
+        if (!Libraries.needed) return
+        if (!Libraries.load(a)) { start(); return }
+        if (!update) return
+        val app = a.applicationContext
+        Thread {
+            val newer = try { Libraries.latest()?.takeIf { it.version > Libraries.installedVersion(app) } } catch (e: Exception) { null }
+            if (newer != null) a.runOnUiThread { if (!a.isDestroyed) start(newer) }
+        }.start()
+    }
 
     /** Show the gate and fetch [asset], or look it up first when null. */
     fun start(asset: Libraries.Asset? = null) {

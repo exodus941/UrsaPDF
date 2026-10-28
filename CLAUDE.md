@@ -20,6 +20,10 @@ memory `ursapdf.md`.
 - **Run the emulator in a visible window when testing, so they can watch.** Never start it with `-no-window`.
 - **Compare frame times only within one emulator GPU mode.** Host GPU in a window reads about 22 ms median for any build; software GPU reads about 17 ms. Take a baseline in the same mode.
 
+## System bars
+
+- **The app never hides the Android navigation bar**, in the reader or anywhere else, with or without the chrome up. The reader hides only the status bar.
+
 ## Motion
 
 - **`%ease250%` is the motion preset: 250 ms, ease-out `cubic-bezier(0, 0, .2, 1)` sliding in, ease-in `cubic-bezier(.42, 0, 1, 1)` sliding out.** When they write `%ease250%`, use exactly this. In code it is `Motion.IN` / `Motion.OUT` with `Motion.MS`.

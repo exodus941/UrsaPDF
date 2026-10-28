@@ -345,7 +345,8 @@ class PdfView(ctx: Context) : View(ctx) {
                 Drag.PAN -> if (edgeDir != 0 && abs(vx) > abs(vy) && abs(vx) > flingMin && (vx < 0) == (edgeDir > 0)) edgeTurn(edgeDir) else {
                     val maxX = max(0f, pageW() - width).toInt()
                     val maxY = max(0f, pageH() - height).toInt()
-                    scroller.fling(sx.toInt(), sy.toInt(), -vx.toInt(), -vy.toInt(), 0, maxX, 0, maxY)
+                    val (fx, fy) = snapFlick(vx, vy)
+                    scroller.fling(sx.toInt(), sy.toInt(), -fx.toInt(), -fy.toInt(), 0, maxX, 0, maxY)
                     postInvalidateOnAnimation()
                 }
                 Drag.NONE -> flung = false
@@ -391,7 +392,7 @@ class PdfView(ctx: Context) : View(ctx) {
                         drag = Drag.PAN
                         invalidate()
                     } else if (e.actionMasked == MotionEvent.ACTION_UP && !dragZoomed) {
-                        if (zoom > 1.01f) zoomToFit(e.x, e.y) else zoomInAt(e.x, e.y)
+                        doubleTap(e.x, e.y)
                     }
                 }
             }
@@ -408,10 +409,50 @@ class PdfView(ctx: Context) : View(ctx) {
     }).apply { setIsLongpressEnabled(false) }
 
     /**
-     * Zoom to [DOUBLE_TAP_ZOOM] over 250 ms, ease-out, carrying the tapped point to the
+     * A flick within 11.25° of a multiple of 45° travels along that line instead, at the
+     * same speed; any other flick keeps its own direction.
+     */
+    private fun snapFlick(vx: Float, vy: Float): Pair<Float, Float> {
+        val speed = kotlin.math.hypot(vx, vy)
+        if (speed == 0f) return vx to vy
+        val deg = Math.toDegrees(kotlin.math.atan2(vy.toDouble(), vx.toDouble()))
+        val near = Math.round(deg / 45.0) * 45.0
+        if (abs(deg - near) > 11.25) return vx to vy
+        val r = Math.toRadians(near)
+        return (speed * kotlin.math.cos(r)).toFloat() to (speed * kotlin.math.sin(r)).toFloat()
+    }
+
+    /**
+     * The zoom that fits the page's long side across the screen's matching side: width
+     * for a page taller than wide, height for one wider than tall. At least 1 (fit).
+     */
+    private fun sideFitZoom(): Float {
+        if (fit.isEmpty()) return 1f
+        val i = currentPage
+        return if (dh[i] >= dw[i]) width / dw[i] else height / dh[i]
+    }
+
+    /**
+     * Double-tap steps: whole page, then fit width (tall page) or height (wide page), then
+     * the close zoom, then back to whole page. A page whose whole view already fits that
+     * side skips the middle step.
+     */
+    private fun doubleTap(fx: Float, fy: Float) {
+        val side = sideFitZoom()
+        val close = max(DOUBLE_TAP_ZOOM, side * 1.5f).coerceAtMost(MAX_ZOOM)
+        when {
+            zoom < 1.01f && side > 1.05f -> zoomInAt(fx, fy, side)
+            zoom < 1.01f -> zoomInAt(fx, fy, close)
+            abs(zoom - side) / side < 0.01f -> zoomInAt(fx, fy, close)
+            else -> zoomToFit(fx, fy)
+        }
+    }
+
+    /**
+     * Zoom to [target] over 250 ms, ease-out, carrying the tapped point to the
      * screen centre (as near as the page edges allow).
      */
-    private fun zoomInAt(fx: Float, fy: Float) {
+    private fun zoomInAt(fx: Float, fy: Float, target: Float = DOUBLE_TAP_ZOOM) {
         if (fit.isEmpty()) return
         zoomAnim?.cancel()
         scroller.forceFinished(true)
@@ -424,7 +465,7 @@ class PdfView(ctx: Context) : View(ctx) {
             interpolator = android.view.animation.PathInterpolator(0f, 0f, 0.2f, 1f)
             addUpdateListener {
                 val t = it.animatedValue as Float
-                zoom = z0 + (DOUBLE_TAP_ZOOM - z0) * t
+                zoom = z0 + (target - z0) * t
                 val px = fx + (width / 2f - fx) * t    // where the point sits on screen now
                 val py = fy + (height / 2f - fy) * t
                 sx = cx / z0 * zoom - px

@@ -66,4 +66,16 @@ fun Window.immersive() {
 fun WindowInsets.safe(): IntArray = if (Build.VERSION.SDK_INT >= 30) {
     getInsetsIgnoringVisibility(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
         .let { intArrayOf(it.left, it.top, it.right, it.bottom) }
-} else intArrayOf(stableInsetLeft, stableInsetTop, stableInsetRight, stableInsetBottom)
+} else {
+    // A fullscreen window on Android 10 and older reports no stable inset for the
+    // navigation bar, which stays up. Its window inset does, but that also counts the
+    // keyboard, so the bottom is capped at the bar's own height.
+    val bar = android.content.res.Resources.getSystem().let { r ->
+        r.getIdentifier("navigation_bar_height", "dimen", "android").takeIf { it != 0 }?.let { r.getDimensionPixelSize(it) } ?: 0
+    }
+    intArrayOf(
+        maxOf(stableInsetLeft, systemWindowInsetLeft), stableInsetTop,
+        maxOf(stableInsetRight, systemWindowInsetRight),
+        maxOf(stableInsetBottom, minOf(systemWindowInsetBottom, bar)),
+    )
+}

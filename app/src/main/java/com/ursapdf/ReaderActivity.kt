@@ -37,10 +37,10 @@ class ReaderActivity : Activity(), PdfView.Listener {
     private var eng: PdfEngine? = null
     private var state: DocState? = null
     private var insets = IntArray(4)
-    private lateinit var invertBtn: ImageView
+    private lateinit var timeoutBtn: ImageView
     private lateinit var backBtn: ImageView
     private lateinit var cropBtn: ImageView
-    private lateinit var themeBtn: ImageView
+    private lateinit var moreBtn: ImageView
     private lateinit var searchBtn: ImageView
     // Search strip: a field row, and under it the previous / count / next row.
     private lateinit var search: LinearLayout
@@ -146,10 +146,10 @@ class ReaderActivity : Activity(), PdfView.Listener {
         // Only for PDFs that are forms; shown once the open document says so.
         editBtn = iconButton(R.drawable.ic_rename, "Fill in Form") { toggleForm() }.apply { visibility = View.GONE }
         top.addView(editBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)))
-        invertBtn = iconButton(R.drawable.ic_invert, "Invert Colours") { toggleInvert() }
-        top.addView(invertBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)))
-        themeBtn = iconButton(R.drawable.ic_bulb_on, "Toggle Light Mode") { Theme.toggle(this) }
-        top.addView(themeBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)).apply { marginEnd = dpi(4) })
+        timeoutBtn = iconButton(R.drawable.ic_timeout, "Screen Timeout") { timeoutMenu() }
+        top.addView(timeoutBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)))
+        moreBtn = iconButton(R.drawable.ic_more, "More options") { moreMenu() }
+        top.addView(moreBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)).apply { marginEnd = dpi(4) })
         ui.addView(top, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.TOP))
 
         bottom = LinearLayout(this).apply {
@@ -194,8 +194,8 @@ class ReaderActivity : Activity(), PdfView.Listener {
             flash.requestLayout()
             strip?.setPadding(insets[0], 0, insets[2], 0)
             scrubber?.let {
-                it.setPadding(insets[0], 0, insets[2], insets[3])
-                it.layoutParams.height = dpi(32) + insets[3]
+                it.setPadding(insets[0], 0, insets[2], insets[3] + barGap())
+                it.layoutParams.height = dpi(32) + insets[3] + barGap()
                 it.requestLayout()
             }
             ins
@@ -227,7 +227,6 @@ class ReaderActivity : Activity(), PdfView.Listener {
         state = s
         e.crop.set(s.crop)
         e.invert = if (s.invert) 1f else 0f
-        paintInvertButton()
         titleView.text = s.name
         pdf.setDocument(e, s.page.coerceIn(0, e.pageCount - 1), s.offset, s.x, s.zoom)
 
@@ -244,10 +243,10 @@ class ReaderActivity : Activity(), PdfView.Listener {
             strip?.centerOn(p)
         }.apply {
             setBackgroundColor(Theme.panel())
-            setPadding(insets[0], 0, insets[2], insets[3])
+            setPadding(insets[0], 0, insets[2], insets[3] + barGap())
         }
         scrubber = sc
-        bottom.addView(sc, LinearLayout.LayoutParams(MATCH_PARENT, dpi(32) + insets[3]))
+        bottom.addView(sc, LinearLayout.LayoutParams(MATCH_PARENT, dpi(32) + insets[3] + barGap()))
         // Older phones without the engine yet: the gate sets the tools up once it is in.
         if (!gate.showing) setupTools(e)
         applyTheme()
@@ -317,13 +316,10 @@ class ReaderActivity : Activity(), PdfView.Listener {
         fieldRow.findViewWithTag<View>("box").background = pill(Theme.button(), 14f)
         field.setTextColor(Theme.text()); field.setHintTextColor(Theme.sub())
         count.setTextColor(Theme.text())
-        for (b in listOf(backBtn, searchBtn, cropBtn, editBtn, themeBtn, goBtn, closeBtn, prevBtn, nextBtn)) {
+        for (b in listOf(backBtn, searchBtn, cropBtn, editBtn, timeoutBtn, moreBtn, goBtn, closeBtn, prevBtn, nextBtn)) {
             b.setColorFilter(Theme.text())
             (b.background as? android.graphics.drawable.RippleDrawable)?.setColor(android.content.res.ColorStateList.valueOf(Theme.ripple()))
         }
-        themeBtn.setImageResource(if (Theme.light) R.drawable.ic_bulb_off else R.drawable.ic_bulb_on)
-        themeBtn.contentDescription = if (Theme.light) "Toggle Dark Mode" else "Toggle Light Mode"
-        paintInvertButton()
         if (::editBtn.isInitialized) paintEditButton()
         for (p in listOf(badge, flash)) {
             p.setTextColor(Theme.text())
@@ -372,7 +368,6 @@ class ReaderActivity : Activity(), PdfView.Listener {
         val e = eng ?: return
         val s = state ?: return
         s.invert = !s.invert
-        paintInvertButton()
         invertAnim?.cancel()
         invertAnim = ValueAnimator.ofFloat(e.invert, if (s.invert) 1f else 0f).apply {
             duration = 250
@@ -383,10 +378,64 @@ class ReaderActivity : Activity(), PdfView.Listener {
         save()
     }
 
-    private fun paintInvertButton() {
-        val on = state?.invert == true
-        invertBtn.setColorFilter(if (on) Theme.accentInk() else Theme.text())
-        invertBtn.isSelected = on
+    /** Space between the scrubber and the navigation bar, so a thumb on it stays clear of the system's buttons. */
+    private fun barGap() = dpi(16)
+
+    /** A menu under the top bar, at its end edge. Each row: a label and an optional mark after it. */
+    private fun menu(rows: List<Triple<String, Int?, () -> Unit>>) {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = pill(Theme.popup(), 12f)
+            elevation = dp(8f)
+            setPadding(0, dpi(8), 0, dpi(8))
+        }
+        val pop = android.widget.PopupWindow(box, WRAP_CONTENT, WRAP_CONTENT, true).apply { elevation = dp(8f); setBackgroundDrawable(null) }
+        for ((text, mark, act) in rows) box.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = ripple()
+            setPadding(dpi(20), dpi(12), dpi(16), dpi(12))
+            minimumWidth = dpi(200)
+            addView(label(text, 15f, Theme.text()), LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+            // The mark's slot is kept when empty, so the labels of a pick list line up.
+            addView(ImageView(context).apply {
+                mark?.let { setImageResource(it) }
+                setColorFilter(if (mark == R.drawable.ic_toggle_off) Theme.sub() else Theme.accentInk())
+            }, LinearLayout.LayoutParams(dpi(24), dpi(24)).apply { marginStart = dpi(16) })
+            setOnClickListener { pop.dismiss(); act() }
+        }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        pop.showAtLocation(root, Gravity.TOP or Gravity.END, dpi(8), top.height)
+    }
+
+    private fun moreMenu() {
+        fun toggle(on: Boolean) = if (on) R.drawable.ic_toggle_on else R.drawable.ic_toggle_off
+        menu(listOf(
+            Triple("Invert Colours", toggle(state?.invert == true)) { toggleInvert() },
+            Triple("Dark Mode", toggle(!Theme.light)) { Theme.toggle(this) },
+        ))
+    }
+
+    private fun timeoutMenu() {
+        val now = ScreenTimeout.get(this)
+        menu(ScreenTimeout.CHOICES.map { (ms, name) ->
+            Triple(name, if (ms == now) R.drawable.ic_check else null) { ScreenTimeout.set(this, ms); awake() }
+        })
+    }
+
+    // The screen stays on while the reader is used, and for the chosen time after the
+    // last touch; then the phone's own screen timeout takes over.
+    private val sleep = Runnable { window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+
+    private fun awake() {
+        val ms = ScreenTimeout.get(this)
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        root.removeCallbacks(sleep)
+        if (ms > 0) root.postDelayed(sleep, ms)
+    }
+
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+        if (ev.actionMasked == android.view.MotionEvent.ACTION_DOWN) awake()
+        return super.dispatchTouchEvent(ev)
     }
 
     private fun openCropper() {
@@ -427,6 +476,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
     override fun onResume() {
         super.onResume()
         Updater.resumed(this, home = false)
+        awake()
     }
 
     override fun onPause() {

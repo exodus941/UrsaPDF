@@ -38,6 +38,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
     private var state: DocState? = null
     private var insets = IntArray(4)
     private lateinit var timeoutBtn: ImageView
+    private lateinit var bookmarkBtn: ImageView
     private lateinit var backBtn: ImageView
     private lateinit var cropBtn: ImageView
     private lateinit var moreBtn: ImageView
@@ -146,6 +147,8 @@ class ReaderActivity : Activity(), PdfView.Listener {
         // Only for PDFs that are forms; shown once the open document says so.
         editBtn = iconButton(R.drawable.ic_rename, "Fill in Form") { toggleForm() }.apply { visibility = View.GONE }
         top.addView(editBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)))
+        bookmarkBtn = iconButton(R.drawable.ic_bookmark, "Bookmarks") { bookmarkMenu() }
+        top.addView(bookmarkBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)))
         timeoutBtn = iconButton(R.drawable.ic_timeout, "Screen Timeout") { timeoutMenu() }
         top.addView(timeoutBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)))
         moreBtn = iconButton(R.drawable.ic_more, "More options") { moreMenu() }
@@ -317,7 +320,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
         fieldRow.findViewWithTag<View>("box").background = pill(Theme.button(), 14f)
         field.setTextColor(Theme.text()); field.setHintTextColor(Theme.sub())
         count.setTextColor(Theme.text())
-        for (b in listOf(backBtn, searchBtn, cropBtn, editBtn, timeoutBtn, moreBtn, goBtn, closeBtn, prevBtn, nextBtn)) {
+        for (b in listOf(backBtn, searchBtn, cropBtn, editBtn, bookmarkBtn, timeoutBtn, moreBtn, goBtn, closeBtn, prevBtn, nextBtn)) {
             b.setColorFilter(Theme.text())
             (b.background as? android.graphics.drawable.RippleDrawable)?.setColor(android.content.res.ColorStateList.valueOf(Theme.ripple()))
         }
@@ -406,6 +409,33 @@ class ReaderActivity : Activity(), PdfView.Listener {
             Menu.Row("Invert Colours", mark = { toggle(state?.invert == true) }, stay = true) { toggleInvert() },
             Menu.Row("Dark Mode", mark = { toggle(!Theme.light) }, stay = true) { Theme.toggle(this) },
         ))
+    }
+
+    private fun bookmarkMenu() {
+        val s = state ?: return
+        val page = pdf.currentPage
+        val marked = page in s.bookmarks
+        openMenu(bookmarkBtn, listOf(
+            Menu.Row(if (marked) "Remove Bookmark" else "Add Bookmark") {
+                if (marked) s.bookmarks -= page else s.bookmarks += page
+                save()
+                toast(if (marked) "Bookmark removed from page ${page + 1}" else "Bookmarked page ${page + 1}")
+            },
+            Menu.Row("Show Bookmarks") { showBookmarks() },
+        ))
+    }
+
+    /** Every bookmark in the file, in page order. A tap jumps there; the minus removes one at once. */
+    private fun showBookmarks() {
+        val s = state ?: return
+        val e = eng ?: return
+        val rows = s.bookmarks.map { p ->
+            Menu.Row("Page ${p + 1} of ${e.pageCount}", remove = { s.bookmarks -= p; save() }) {
+                pdf.jumpTo(p); strip?.centerOn(p)
+            }
+        }
+        menuOf = bookmarkBtn
+        menu.show(rows, Gravity.TOP or Gravity.END, dpi(8), top.height, maxHeight = (root.height * 0.6f).toInt(), empty = "No bookmarks yet")
     }
 
     private fun timeoutMenu() {

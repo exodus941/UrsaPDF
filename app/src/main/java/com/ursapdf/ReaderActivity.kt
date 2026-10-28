@@ -139,7 +139,8 @@ class ReaderActivity : Activity(), PdfView.Listener {
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.MIDDLE
         }
-        top.addView(titleView, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+        // 16 dp after the title doubles the gap you see to the search glyph (46 to about 90 px at 2.6x).
+        top.addView(titleView, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { marginEnd = dpi(16) })
         searchBtn = iconButton(R.drawable.ic_search, "Search") { openSearch() }.apply { visibility = View.GONE }
         top.addView(searchBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)))
         cropBtn = iconButton(R.drawable.ic_crop, "Page Cropper") { openCropper() }

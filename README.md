@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/icon.svg" width="128" height="128" alt="UrsaPDF icon: a black bear head over a box reading PDF, on amber"></p>
+
 # UrsaPDF
 
 A small, fast PDF reader for Android 8+. No libraries beyond the Kotlin standard library in the app itself; pages render with the platform `PdfRenderer`.

@@ -1,0 +1,13 @@
+<!-- The launcher icon (app/src/main/res/drawable/ic_bear.xml on @color/accent), cropped to
+     the 72-unit area a launcher shows of a 108-unit adaptive icon. "PDF" is drawn from
+     Five by Five by jeti (CC BY 4.0). Keep in step with ic_bear.xml. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="18 18 72 72" width="256" height="256">
+  <rect x="18" y="18" width="72" height="72" rx="16" fill="#FFB300"/>
+  <g transform="translate(0,-5.85) translate(54,31) scale(0.7434) translate(-54,-31)">
+    <path fill="#121212" d="M30,40a9,9 0 1,0 18,0a9,9 0 1,0 -18,0z M60,40a9,9 0 1,0 18,0a9,9 0 1,0 -18,0z M32,58a22,21 0 1,0 44,0a22,21 0 1,0 -44,0z"/>
+    <path fill="#FFB300" d="M44,64a10,8 0 1,0 20,0a10,8 0 1,0 -20,0z M43,52a3,3 0 1,0 6,0a3,3 0 1,0 -6,0z M59,52a3,3 0 1,0 6,0a3,3 0 1,0 -6,0z"/>
+    <path fill="#121212" d="M50,62a4,3 0 1,0 8,0a4,3 0 1,0 -8,0z"/>
+  </g>
+  <path fill="#121212" d="M35.73,64.83h36.53a2.0,2.0 0 0 1 2.0,2.0v10.70a2.0,2.0 0 0 1 -2.0,2.0h-36.53a2.0,2.0 0 0 1 -2.0,-2.0v-10.70a2.0,2.0 0 0 1 2.0,-2.0z"/>
+  <path fill="#FFB300" d="M37.94,67.45h7.56v1.89h-7.56zM37.94,69.34h1.89v1.89h-1.89zM45.50,69.34h1.89v1.89h-1.89zM37.94,71.23h7.56v1.89h-7.56zM37.94,73.12h1.89v1.89h-1.89zM37.94,75.02h1.89v1.89h-1.89zM49.28,67.45h7.56v1.89h-7.56zM49.28,69.34h1.89v1.89h-1.89zM56.84,69.34h1.89v1.89h-1.89zM49.28,71.23h1.89v1.89h-1.89zM56.84,71.23h1.89v1.89h-1.89zM49.28,73.12h1.89v1.89h-1.89zM56.84,73.12h1.89v1.89h-1.89zM49.28,75.02h7.56v1.89h-7.56zM60.62,67.45h9.45v1.89h-9.45zM60.62,69.34h1.89v1.89h-1.89zM60.62,71.23h7.56v1.89h-7.56zM60.62,73.12h1.89v1.89h-1.89zM60.62,75.02h1.89v1.89h-1.89z"/>
+</svg>

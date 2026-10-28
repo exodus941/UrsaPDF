@@ -57,6 +57,7 @@ class HomeActivity : Activity() {
     private lateinit var bottomFade: Vignette
     private lateinit var bar: LinearLayout
     private lateinit var modal: Modal
+    private lateinit var menu: Menu
     private lateinit var gate: LibraryGate
     private var bottomInset = 0
     private val onTheme: () -> Unit = { applyTheme() }
@@ -133,6 +134,7 @@ class HomeActivity : Activity() {
         }
         setContentView(frame)
         modal = Modal(this, frame, root)
+        menu = Menu(this, frame)
         gate = LibraryGate(this, frame) {}
         // Phones without built-in search and forms: download the engine on first launch
         // (blocking), and check on every launch whether a newer one is published.
@@ -283,27 +285,24 @@ class HomeActivity : Activity() {
         row.setBackgroundColor(if (on) Theme.selected() else 0)
         (row.foreground as? RippleDrawable)?.setColor(ColorStateList.valueOf(Theme.ripple()))
         (row.getChildAt(0) as ImageView).apply {
-            visibility = if (selecting) View.VISIBLE else View.GONE
             setImageResource(if (on) R.drawable.ic_checked else R.drawable.ic_unchecked)
             setColorFilter(if (on) Theme.accentInk() else Theme.sub())
         }
         val texts = row.getChildAt(1) as LinearLayout
         (texts.getChildAt(0) as TextView).setTextColor(Theme.text())
         (texts.getChildAt(1) as TextView).setTextColor(Theme.sub())
-        (row.getChildAt(2) as ImageView).apply {
-            visibility = if (selecting) View.INVISIBLE else View.VISIBLE
-            setColorFilter(Theme.sub())
-        }
+        (row.getChildAt(2) as ImageView).setColorFilter(Theme.sub())
+        applySel(row)
     }
 
     // ---- search ----
 
     private fun filter() {
         val q = search.text.toString().trim()
-        clear.visibility = if (search.text.isEmpty()) View.GONE else View.VISIBLE
+        clear.fade(search.text.isNotEmpty())
         shown = if (q.isEmpty()) docs else docs.filter { it.name.contains(q, ignoreCase = true) }
         empty.text = if (q.isNotEmpty() && shown.isEmpty()) "No PDF names contain “$q”" else ""
-        empty.visibility = if (empty.text.isEmpty()) View.GONE else View.VISIBLE
+        empty.fade(empty.text.isNotEmpty())
         rows.notifyDataSetChanged()
         if (q != lastQuery) list.setSelection(0)  // new results start at the top
         lastQuery = q
@@ -319,38 +318,24 @@ class HomeActivity : Activity() {
     // ---- one file ----
 
     private fun rowMenu(anchor: View, d: DocState) {
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = pill(Theme.popup(), 12f)
-            elevation = dp(8f)
-            setPadding(0, dpi(8), 0, dpi(8))
-        }
-        val pop = PopupWindow(box, WRAP_CONTENT, WRAP_CONTENT, true).apply { elevation = dp(8f); setBackgroundDrawable(null) }
-        fun item(icon: Int, text: String, act: () -> Unit) = box.addView(LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            background = ripple()
-            setPadding(dpi(16), dpi(12), dpi(24), dpi(12))
-            addView(ImageView(context).apply { setImageResource(icon); setColorFilter(Theme.text()) }, LinearLayout.LayoutParams(dpi(22), dpi(22)))
-            addView(label(text, 15f, Theme.text()).apply { setPadding(dpi(16), 0, 0, 0) })
-            setOnClickListener { pop.dismiss(); act() }
-        }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
-        item(R.drawable.ic_remove, "Remove from list") {
-            modal.confirm("Remove from list?", "“${d.name}” leaves the list until you open it again. The file stays where it is.", "Remove") {
-                Store.remove(this, d.uri)
-                refresh()
-                toast("Removed “${d.name}” from the list")
-            }
-        }
-        item(R.drawable.ic_rename, "Rename file") { rename(d) }
-        item(R.drawable.ic_delete, "Delete file") {
-            modal.confirm("Delete file?", "“${d.name}” will be deleted from this device. This cannot be undone.", "Delete") {
-                if (deleteFile(d)) { refresh(); toast("Deleted “${d.name}”") }
-                else toast("Couldn’t delete “${d.name}”: the app that shared it doesn’t allow it")
-            }
-        }
+        val rows = listOf(
+            Menu.Row("Remove from list", icon = R.drawable.ic_remove) {
+                modal.confirm("Remove from list?", "“${d.name}” leaves the list until you open it again. The file stays where it is.", "Remove") {
+                    Store.remove(this, d.uri)
+                    refresh()
+                    toast("Removed “${d.name}” from the list")
+                }
+            },
+            Menu.Row("Rename file", icon = R.drawable.ic_rename) { rename(d) },
+            Menu.Row("Delete file", icon = R.drawable.ic_delete) {
+                modal.confirm("Delete file?", "“${d.name}” will be deleted from this device. This cannot be undone.", "Delete") {
+                    if (deleteFile(d)) { refresh(); toast("Deleted “${d.name}”") }
+                    else toast("Couldn’t delete “${d.name}”: the app that shared it doesn’t allow it")
+                }
+            },
+        )
         val at = IntArray(2).also { anchor.getLocationInWindow(it) }
-        pop.showAtLocation(frame, Gravity.TOP or Gravity.END, dpi(12), at[1])
+        menu.show(rows, Gravity.TOP or Gravity.END, dpi(12), at[1])
     }
 
     private fun rename(d: DocState) {
@@ -388,8 +373,44 @@ class HomeActivity : Activity() {
         if (!selecting) {
             selecting = true
             bar.animate().translationY(0f).setDuration(Motion.MS).setInterpolator(Motion.IN).start()
+            animateSel(1f)
         }
         toggle(d)
+    }
+
+    // 0 = normal rows, 1 = multi-select: checkboxes faded in and opened to full width,
+    // the ⋮ faded out. One animation for all rows, applied to the rows on screen each frame,
+    // since the list may hand a row's view to another position mid-way.
+    private var selT = 0f
+    private var selAnim: android.animation.ValueAnimator? = null
+
+    private fun animateSel(to: Float) {
+        selAnim?.cancel()
+        selAnim = android.animation.ValueAnimator.ofFloat(selT, to).apply {
+            duration = (Motion.MS * kotlin.math.abs(to - selT)).toLong()
+            interpolator = if (to > selT) Motion.IN else Motion.OUT
+            addUpdateListener {
+                selT = it.animatedValue as Float
+                for (k in 0 until list.childCount) applySel(list.getChildAt(k))
+            }
+            start()
+        }
+    }
+
+    private fun applySel(v: View) {
+        val row = v as? LinearLayout ?: return
+        if (row.tag !is DocState) return
+        val box = row.getChildAt(0)
+        box.visibility = if (selT > 0f) View.VISIBLE else View.GONE
+        box.alpha = Motion.FADE.getInterpolation(selT)
+        (box.layoutParams as LinearLayout.LayoutParams).let { lp ->
+            val w = (dpi(22) * selT).toInt(); val m = (dpi(16) * selT).toInt()
+            // marginEnd set after layout is not re-resolved, so the physical side is set too.
+            if (lp.width != w || lp.marginEnd != m) { lp.width = w; lp.marginEnd = m; if (row.layoutDirection == View.LAYOUT_DIRECTION_RTL) lp.leftMargin = m else lp.rightMargin = m; box.requestLayout() }
+        }
+        val more = row.getChildAt(2)
+        more.alpha = 1f - selT
+        more.visibility = if (selT < 1f) View.VISIBLE else View.INVISIBLE
     }
 
     private fun toggle(d: DocState) {
@@ -401,6 +422,7 @@ class HomeActivity : Activity() {
         selecting = false
         selected.clear()
         bar.animate().translationY(bar.height.toFloat()).setDuration(Motion.MS).setInterpolator(Motion.OUT).start()
+        animateSel(0f)
         rows.notifyDataSetChanged()
         place()
     }
@@ -434,9 +456,18 @@ class HomeActivity : Activity() {
     }
 
     @Deprecated("Deprecated in Java")
+    // A file's menu lets touches through, so a touch anywhere else closes it and does nothing more.
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+        if (::menu.isInitialized && menu.showing && ev.actionMasked == android.view.MotionEvent.ACTION_DOWN) { menu.dismiss(); swallow = true }
+        if (swallow) { if (ev.actionMasked == android.view.MotionEvent.ACTION_UP || ev.actionMasked == android.view.MotionEvent.ACTION_CANCEL) swallow = false; return true }
+        return super.dispatchTouchEvent(ev)
+    }
+    private var swallow = false
+
     override fun onBackPressed() {
         when {
             gate.showing -> {}  // the library download cannot be dismissed
+            menu.showing -> menu.dismiss()
             modal.showing -> modal.cancel()
             selecting -> stopSelecting()
             search.text.isNotEmpty() -> search.setText("")

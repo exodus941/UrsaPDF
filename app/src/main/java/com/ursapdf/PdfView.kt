@@ -534,7 +534,25 @@ class PdfView(ctx: Context) : View(ctx) {
 
     /** Matches to paint: page to matches, each match a list of page-point rects. */
     var hits: Map<Int, List<List<RectF>>> = emptyMap()
-        set(v) { field = v; invalidate() }
+        set(v) {
+            // Highlights fade in when the first arrive and out when cleared, over 250 ms.
+            if (field.isEmpty() && v.isNotEmpty()) { fadeHits(1f); shownHits = v }
+            else if (v.isEmpty() && field.isNotEmpty()) { shownHits = field; fadeHits(0f) }
+            else shownHits = v
+            field = v; invalidate()
+        }
+    private var shownHits: Map<Int, List<List<RectF>>> = emptyMap()
+    private var hitFade = 0f
+    private var hitAnim: android.animation.ValueAnimator? = null
+    private fun fadeHits(to: Float) {
+        hitAnim?.cancel()
+        hitAnim = android.animation.ValueAnimator.ofFloat(hitFade, to).apply {
+            duration = (Motion.MS * kotlin.math.abs(to - hitFade)).toLong()
+            interpolator = Motion.FADE
+            addUpdateListener { hitFade = it.animatedValue as Float; invalidate() }
+            start()
+        }
+    }
     /** The match being viewed: page and index within that page. */
     var focusHit: Pair<Int, Int>? = null
         set(v) { field = v; invalidate() }
@@ -561,7 +579,8 @@ class PdfView(ctx: Context) : View(ctx) {
     }
 
     private fun drawHits(c: Canvas, e: PdfEngine, i: Int, x: Float, y: Float, z: Float) {
-        val list = hits[i] ?: return
+        if (hitFade <= 0f) return
+        val list = shownHits[i] ?: return
         val s = fit[i] * z  // screen px per point
         val ox = x - e.crop.left * e.pw[i] * s
         val oy = y - e.crop.top * e.ph[i] * s
@@ -569,8 +588,8 @@ class PdfView(ctx: Context) : View(ctx) {
         val pad = context.dp(2f)
         list.forEachIndexed { k, rects ->
             val focused = focusHit?.let { it.first == i && it.second == k } == true
-            hitPaint.color = ink; hitPaint.alpha = if (focused) 140 else 70
-            focusLine.color = ink
+            hitPaint.color = ink; hitPaint.alpha = ((if (focused) 140 else 70) * hitFade).toInt()
+            focusLine.color = ink; focusLine.alpha = (255 * hitFade).toInt()
             for (r in rects) {
                 hr.set(ox + r.left * s - pad, oy + r.top * s - pad, ox + r.right * s + pad, oy + r.bottom * s + pad)
                 c.drawRoundRect(hr, pad, pad, hitPaint)
@@ -583,7 +602,20 @@ class PdfView(ctx: Context) : View(ctx) {
 
     /** Edit mode: fields are outlined and taps on them go to [Listener.onFieldTap]. */
     var formMode = false
-        set(v) { field = v; invalidate() }
+        set(v) {
+            if (v == field) return
+            field = v
+            // The outlines fade in and out over 250 ms.
+            fieldAnim?.cancel()
+            fieldAnim = android.animation.ValueAnimator.ofFloat(fieldFade, if (v) 1f else 0f).apply {
+                duration = (Motion.MS * kotlin.math.abs((if (v) 1f else 0f) - fieldFade)).toLong()
+                interpolator = Motion.FADE
+                addUpdateListener { fieldFade = it.animatedValue as Float; invalidate() }
+                start()
+            }
+        }
+    private var fieldFade = 0f
+    private var fieldAnim: android.animation.ValueAnimator? = null
     /** Fields of the pages loaded so far. */
     var fields: Map<Int, List<Field>> = emptyMap()
         set(v) { field = v; invalidate() }
@@ -655,10 +687,10 @@ class PdfView(ctx: Context) : View(ctx) {
                 }
             }
         }
-        if (!formMode) return
+        if (fieldFade <= 0f) return
         val ink = Theme.accentInk()
-        fieldTint.color = ink; fieldTint.alpha = 28
-        fieldLine.color = ink
+        fieldTint.color = ink; fieldTint.alpha = (28 * fieldFade).toInt()
+        fieldLine.color = ink; fieldLine.alpha = (255 * fieldFade).toInt()
         fields[i]?.forEach { f ->
             if (!f.editable) return@forEach
             toScreen(e, i, x, y, z, f.rect, fr)

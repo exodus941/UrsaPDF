@@ -202,6 +202,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
         }
         setContentView(root)
         modal = Modal(this, root, pdf)
+        menu = Menu(this, root)
         // A PDF opened from another app skips the home list, so the reader blocks too.
         gate = LibraryGate(this, root) { eng?.let { setupTools(it) } }
         gate.check(update = false)
@@ -257,9 +258,9 @@ class ReaderActivity : Activity(), PdfView.Listener {
     private fun setupTools(e: PdfEngine) {
         val t = Tools.of(e)
         tools = t
-        searchBtn.visibility = if (t?.canSearch == true) View.VISIBLE else View.GONE
+        searchBtn.fade(t?.canSearch == true)
         t?.isForm { form ->
-            editBtn.visibility = if (form) View.VISIBLE else View.GONE
+            editBtn.fade(form)
             isForm = form
             if (form && !t.live) loadFields(pdf.currentPage)
         }
@@ -333,12 +334,15 @@ class ReaderActivity : Activity(), PdfView.Listener {
     override fun onTap(x: Float, y: Float) {
         if (eng == null) return
         if (searching) { keyboard(false); return }
+        // With a menu open, a tap on the page only closes the menu.
+        if (menu.showing) { menu.dismiss(); return }
         // Taps never turn pages, so a tap anywhere toggles the chrome.
         if (uiShown) hideUi() else showUi()
     }
 
     override fun onVerticalSwipe() {
         if (eng == null || searching) return
+        if (menu.showing) { menu.dismiss(); return }
         if (uiShown) hideUi() else showUi()
     }
 
@@ -357,6 +361,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
     private fun hideUi() {
         if (!uiShown) return
         uiShown = false
+        menu.dismiss()
         top.animate().translationY(-top.height.toFloat()).setDuration(250).setInterpolator(easeIn).start()
         bottom.animate().translationY(bottom.height.toFloat()).setDuration(250).setInterpolator(easeIn)
             .withEndAction { if (!uiShown) strip?.visibility = View.INVISIBLE }.start()
@@ -381,44 +386,31 @@ class ReaderActivity : Activity(), PdfView.Listener {
     /** Space between the scrubber and the navigation bar, so a thumb on it stays clear of the system's buttons. */
     private fun barGap() = dpi(16)
 
-    /** A menu under the top bar, at its end edge. Each row: a label and an optional mark after it. */
-    private fun menu(rows: List<Triple<String, Int?, () -> Unit>>) {
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = pill(Theme.popup(), 12f)
-            elevation = dp(8f)
-            setPadding(0, dpi(8), 0, dpi(8))
-        }
-        val pop = android.widget.PopupWindow(box, WRAP_CONTENT, WRAP_CONTENT, true).apply { elevation = dp(8f); setBackgroundDrawable(null) }
-        for ((text, mark, act) in rows) box.addView(LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            background = ripple()
-            setPadding(dpi(20), dpi(12), dpi(16), dpi(12))
-            minimumWidth = dpi(200)
-            addView(label(text, 15f, Theme.text()), LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
-            // The mark's slot is kept when empty, so the labels of a pick list line up.
-            addView(ImageView(context).apply {
-                mark?.let { setImageResource(it) }
-                setColorFilter(if (mark == R.drawable.ic_toggle_off) Theme.sub() else Theme.accentInk())
-            }, LinearLayout.LayoutParams(dpi(24), dpi(24)).apply { marginStart = dpi(16) })
-            setOnClickListener { pop.dismiss(); act() }
-        }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
-        pop.showAtLocation(root, Gravity.TOP or Gravity.END, dpi(8), top.height)
+    private lateinit var menu: Menu
+    private var menuOf: View? = null
+
+    /** Opens a menu under the top bar at its end edge; its own button closes it again. */
+    private fun openMenu(from: View, rows: List<Menu.Row>) {
+        val same = menu.showing && menuOf === from
+        menu.dismiss()
+        menuOf = null
+        if (same) return
+        menuOf = from
+        menu.show(rows, Gravity.TOP or Gravity.END, dpi(8), top.height)
     }
 
     private fun moreMenu() {
         fun toggle(on: Boolean) = if (on) R.drawable.ic_toggle_on else R.drawable.ic_toggle_off
-        menu(listOf(
-            Triple("Invert Colours", toggle(state?.invert == true)) { toggleInvert() },
-            Triple("Dark Mode", toggle(!Theme.light)) { Theme.toggle(this) },
+        // The toggles leave the menu open; a tap outside it closes it.
+        openMenu(moreBtn, listOf(
+            Menu.Row("Invert Colours", mark = { toggle(state?.invert == true) }, stay = true) { toggleInvert() },
+            Menu.Row("Dark Mode", mark = { toggle(!Theme.light) }, stay = true) { Theme.toggle(this) },
         ))
     }
 
     private fun timeoutMenu() {
-        val now = ScreenTimeout.get(this)
-        menu(ScreenTimeout.CHOICES.map { (ms, name) ->
-            Triple(name, if (ms == now) R.drawable.ic_check else null) { ScreenTimeout.set(this, ms); awake() }
+        openMenu(timeoutBtn, ScreenTimeout.CHOICES.map { (ms, name) ->
+            Menu.Row(name, mark = { if (ms == ScreenTimeout.get(this)) R.drawable.ic_check else null }) { ScreenTimeout.set(this, ms); awake() }
         })
     }
 
@@ -787,6 +779,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
     override fun onBackPressed() {
         when {
             gate.showing -> {}  // the library download cannot be dismissed
+            menu.showing -> menu.dismiss()
             modal.showing -> modal.cancel()
             cropper != null -> closeCropper(null)
             // While viewing results, Back steps back one result; from the first, it closes.

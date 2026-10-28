@@ -27,4 +27,5 @@ memory `ursapdf.md`.
 ## Motion
 
 - **`%ease250%` is the motion preset: 250 ms, ease-out `cubic-bezier(0, 0, .2, 1)` sliding in, ease-in `cubic-bezier(.42, 0, 1, 1)` sliding out.** When they write `%ease250%`, use exactly this. In code it is `Motion.IN` / `Motion.OUT` with `Motion.MS`.
+- **Nothing appears or disappears in one frame.** Every new menu, popup, panel, overlay or control that shows or hides gets its transition in the same change, unasked: a 250 ms linear fade, or `%ease250%` if it slides. Check each new surface for it before shipping.
 - **UI transitions use `%ease250%` unless they say otherwise.** This covers the reader chrome, search strip, cropper, modals, invert and the theme switch. Opacity fades run linear over the same 250 ms: an ease-out curve makes a fade read as a pop.

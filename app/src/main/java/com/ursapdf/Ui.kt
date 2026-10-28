@@ -36,6 +36,22 @@ fun Context.label(text: String, sp: Float, color: Int, bold: Boolean = false) = 
     if (bold) setTypeface(typeface, android.graphics.Typeface.BOLD)
 }
 
+/**
+ * Show or hide with a 250 ms linear fade instead of in one frame. [gone] picks GONE or
+ * INVISIBLE once faded out. Does nothing when already in that state.
+ */
+fun View.fade(show: Boolean, gone: Boolean = true) {
+    val hidden = if (gone) View.GONE else View.INVISIBLE
+    val want = if (show) 1f else 0f
+    if (show && visibility == View.VISIBLE && alpha == 1f) return
+    if (!show && visibility != View.VISIBLE) return
+    animate().cancel()
+    if (show && visibility != View.VISIBLE) { alpha = 0f; visibility = View.VISIBLE }
+    animate().alpha(want).setDuration((com.ursapdf.Motion.MS * kotlin.math.abs(want - alpha)).toLong())
+        .setInterpolator(com.ursapdf.Motion.FADE)
+        .withEndAction { if (!show) visibility = hidden }.start()
+}
+
 /** Draw behind the system bars on every API level; views pad themselves by insets. */
 @Suppress("DEPRECATION")
 fun Window.edgeToEdge() {

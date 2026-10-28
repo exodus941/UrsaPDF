@@ -42,7 +42,7 @@ class LibraryGate(private val a: Activity, private val host: FrameLayout, privat
     /** Show the gate and fetch [asset], or look it up first when null. */
     fun start(asset: Libraries.Asset? = null) {
         if (view == null) build()
-        retry.visibility = View.GONE
+        retry.fade(false, gone = false)
         status.text = "Connecting…"
         bar.isIndeterminate = true
         val app = a.applicationContext
@@ -76,7 +76,7 @@ class LibraryGate(private val a: Activity, private val host: FrameLayout, privat
     private fun fail(why: String) {
         bar.isIndeterminate = false; bar.progress = 0
         status.text = why
-        retry.visibility = View.VISIBLE
+        retry.fade(true)
     }
 
     private fun build() {
@@ -104,7 +104,7 @@ class LibraryGate(private val a: Activity, private val host: FrameLayout, privat
             foreground = a.ripple()
             setPadding(a.dpi(24), a.dpi(12), a.dpi(24), a.dpi(12))
             setOnClickListener { start() }
-            visibility = View.GONE
+            visibility = View.INVISIBLE  // holds its space, so the text above stays put when it fades in
         }
         col.addView(retry, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { topMargin = a.dpi(24) })
         v.addView(col, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.CENTER))

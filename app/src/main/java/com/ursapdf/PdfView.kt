@@ -423,19 +423,19 @@ class PdfView(ctx: Context) : View(ctx) {
     }
 
     /**
-     * The zoom that fits the page's long side across the screen's matching side: width
-     * for a page taller than wide, height for one wider than tall. At least 1 (fit).
+     * The whole page fits one screen axis and leaves a margin on the other; this is the
+     * zoom at which it fills that other axis too. A4 upright on a phone upright: its
+     * height. Turn either one sideways and it flips.
      */
     private fun sideFitZoom(): Float {
         if (fit.isEmpty()) return 1f
         val i = currentPage
-        return if (dh[i] >= dw[i]) width / dw[i] else height / dh[i]
+        return max(width / dw[i], height / dh[i])
     }
 
     /**
-     * Double-tap steps: whole page, then fit width (tall page) or height (wide page), then
-     * the close zoom, then back to whole page. A page whose whole view already fits that
-     * side skips the middle step.
+     * Double-tap steps: whole page, then filling the screen's other axis, then the close
+     * zoom, then back to whole page. A page that already fills both skips the middle step.
      */
     private fun doubleTap(fx: Float, fy: Float) {
         val side = sideFitZoom()

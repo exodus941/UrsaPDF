@@ -2,7 +2,7 @@
 
 # UrsaPDF
 
-A small, fast PDF reader for Android 8+. No libraries beyond the Kotlin standard library in the app itself; pages render with the platform `PdfRenderer`.
+A small, fast, 'bear minimum' PDF reader for Android 8+. No libraries beyond the Kotlin standard library in the app itself; pages render with the platform `PdfRenderer`.
 
 - Home: recent PDFs, newest first, each with its page, when it was last read and its file size. **Open a PDF** and a name search (filters as you type) stay pinned at the top; a soft shadow shows where the list runs under them or off the screen. Each file's ⋮ menu removes it from the list, renames it or deletes it; a long press selects several to remove or delete at once. Two icons at the top right toggle light/dark mode and check for updates; updates also install themselves from the latest release here. Light mode is the default on e-ink devices (Onyx Boox, Bigme, Meebook and others, detected by maker); dark everywhere else.
 - Reader: fullscreen apart from the navigation bar, one page at a time. Swipe left or right to turn pages; pinch, or double-tap and drag (up to zoom in, down to zoom out), to zoom; double-tap to step from the whole page to its width (tall pages) or height (wide pages), then closer, then back to the whole page; a flick while zoomed glides on, along the nearest 45° line when within 11.25° of it; drag to pan while zoomed, and push past a zoomed edge to turn. Tap anywhere on the page, or swipe up or down, for the page strip, the scrubber bar under it (press or drag to jump), **Search**, **Page Cropper**, a **screen timeout** (30 seconds to 5 minutes after the last touch, or none) and a ⋮ menu with **Invert Colours** and **Dark Mode**.

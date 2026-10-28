@@ -29,19 +29,12 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleRelease -PversionName="$V" --no-daemon
           cp app/build/outputs/apk/release/app-release.apk "UrsaPDF-$V.apk"
-      # The engine phones without built-in search and forms download on first launch.
-      - name: Build and sign engine
-        env:
-          URSA_KS_PASS: ${{ secrets.URSA_KS_PASS }}
-        run: |
-          export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
-          bash engine/build.sh engine-out
-          bash engine/sign.sh ursapdf.keystore "$URSA_KS_PASS" engine-out/*.zip
           rm -f ursapdf.keystore
+      # The engine is not attached here: engine.yml publishes it into engine/ on main.
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" UrsaPDF-*.apk engine-out/* --title "UrsaPDF ${GITHUB_REF_NAME}" --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" UrsaPDF-*.apk --title "UrsaPDF ${GITHUB_REF_NAME}" --generate-notes
       # Only the newest release exists: every other release and its tag is deleted.
       - name: Remove older releases
         env:

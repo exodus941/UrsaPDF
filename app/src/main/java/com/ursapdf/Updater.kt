@@ -214,10 +214,8 @@ class InstallReceiver : BroadcastReceiver() {
                     else @Suppress("DEPRECATION") i.getParcelableExtra(Intent.EXTRA_INTENT)
                 confirm?.let { c.startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
             }
-            // The update closed the app; updates install from the home list, so reopen it.
-            PackageInstaller.STATUS_SUCCESS -> try {
-                c.startActivity(Intent(c, HomeActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            } catch (_: Exception) {}
+            // Reopening the app here is refused: Android blocks activity starts from the background.
+            PackageInstaller.STATUS_SUCCESS -> {}
             else -> Toast.makeText(c, "Update failed: ${i.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)}", Toast.LENGTH_LONG).show()
         }
     }

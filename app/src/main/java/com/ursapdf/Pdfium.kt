@@ -1,7 +1,7 @@
 package com.ursapdf
 
 /**
- * The downloaded engine's entry points (engine/ursa.c). Only callable after
+ * The downloaded engine's entry points (engine/src/ursa.c). Only callable after
  * [Libraries.load] succeeds. PDFium is not thread-safe: call from one thread.
  */
 object Pdfium {

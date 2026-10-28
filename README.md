@@ -19,7 +19,9 @@ Release signing reads `URSA_KS_PATH` and `URSA_KS_PASS` from the environment or 
 
 ## Release
 
-Push a tag `vX.Y.Z`. The workflow builds a signed APK and the engine for four phone processor types (`engine/build.sh`), signs each engine with the release key (`engine/sign.sh`), attaches them all to a GitHub release and deletes every older release, so only the newest exists. The app loads an engine only if its signature matches the app's own signing certificate. Bump `engine/VERSION` to make phones download a new engine; bump `ENGINE_API` in `engine/ursa.c` and `Pdfium.API` together when its functions change.
+Push a tag `vX.Y.Z`. The workflow builds a signed APK, attaches it to a GitHub release and deletes every older release, so only the newest exists.
+
+The engine lives in `engine/`: one zip per phone processor type, each with a signature, and `latest.json`, which the app reads. Its source is in `engine/src/`. Bump `engine/src/VERSION` and push to main: a workflow builds the engine (`engine/src/build.sh`), signs it with the release key (`engine/src/sign.sh`) and commits it into `engine/`, and phones then download it. The app loads an engine only if its signature matches the app's own signing certificate. Bump `ENGINE_API` in `engine/src/ursa.c` and `Pdfium.API` together when its functions change.
 
 ## Credits
 

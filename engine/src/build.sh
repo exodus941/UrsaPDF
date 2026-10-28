@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Builds the downloadable engine: one zip per ABI holding libpdfium.so (prebuilt by
-# bblanchon/pdfium-binaries, pinned below), libursa.so (engine/ursa.c) and the licences.
+# bblanchon/pdfium-binaries, pinned below), libursa.so (engine/src/ursa.c) and the licences.
 #
-# Usage: engine/build.sh OUTDIR [abi ...]     abis: arm64 arm x64 x86 (default: all)
+# Usage: engine/src/build.sh OUTDIR [abi ...]     abis: arm64 arm x64 x86 (default: all)
 # Needs ANDROID_NDK_HOME (or ANDROID_HOME with ndk/<version>), curl, tar, python.
 set -euo pipefail
 

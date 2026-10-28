@@ -1,0 +1,36 @@
+name: Publish engine
+
+# When the engine source changes on main, build and sign the engine into engine/ and
+# commit it. Phones without built-in search and forms download it from there.
+# publish.sh skips the build unless engine/src/VERSION is newer than engine/latest.json.
+on:
+  push:
+    branches: [main]
+    paths: ["engine/src/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and sign
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+          URSA_KS_PASS: ${{ secrets.URSA_KS_PASS }}
+        run: |
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/ursapdf.keystore"
+          export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
+          bash engine/src/publish.sh "$RUNNER_TEMP/ursapdf.keystore" "$URSA_KS_PASS"
+          rm -f "$RUNNER_TEMP/ursapdf.keystore"
+      - name: Commit
+        run: |
+          git add -A engine
+          git diff --cached --quiet && exit 0
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "Publish engine v$(cat engine/src/VERSION)"
+          git pull --rebase
+          git push

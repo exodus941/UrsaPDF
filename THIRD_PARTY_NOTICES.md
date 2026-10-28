@@ -2,7 +2,7 @@
 
 ## PDFium, and pdfium-binaries by Benoît Blanchon
 
-The downloadable engine (`ursa-engine-*.zip` on each release, built by `engine/build.sh`) contains PDFium, https://pdfium.googlesource.com/pdfium/, as prebuilt for Android by pdfium-binaries (chromium/8125), https://github.com/bblanchon/pdfium-binaries. PDFium is under the BSD 3-Clause licence; pdfium-binaries is under the MIT licence. The libraries PDFium bundles (FreeType, libjpeg-turbo, OpenJPEG, libpng, zlib, lcms, ICU, HarfBuzz, Abseil and others) keep their own licences. Every licence text ships inside each engine zip, in its `licenses/` folder. The app itself contains none of this code.
+The downloadable engine (`ursa-engine-*.zip` in the repo's `engine/` folder, built by `engine/src/build.sh`) contains PDFium, https://pdfium.googlesource.com/pdfium/, as prebuilt for Android by pdfium-binaries (chromium/8125), https://github.com/bblanchon/pdfium-binaries. PDFium is under the BSD 3-Clause licence; pdfium-binaries is under the MIT licence. The libraries PDFium bundles (FreeType, libjpeg-turbo, OpenJPEG, libpng, zlib, lcms, ICU, HarfBuzz, Abseil and others) keep their own licences. Every licence text ships inside each engine zip, in its `licenses/` folder. The app itself contains none of this code.
 
 ## Five by Five, by jeti
 

@@ -2,7 +2,7 @@
 # Signs each engine zip with the app's release key: writes <zip>.sig, an RSA
 # SHA-256 signature the app checks against its own signing certificate.
 #
-# Usage: engine/sign.sh KEYSTORE PASSWORD zip...      (alias "ursa", PKCS12 keystore)
+# Usage: engine/src/sign.sh KEYSTORE PASSWORD zip...      (alias "ursa", PKCS12 keystore)
 set -euo pipefail
 KS=$1; PASS=$2; shift 2
 KEY=$(mktemp)

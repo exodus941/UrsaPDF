@@ -12,10 +12,11 @@ import java.security.cert.CertificateFactory
 import java.util.zip.ZipInputStream
 
 /**
- * The downloaded engine (PDFium plus engine/ursa.c) for phones without built-in search
- * and forms. It ships as `ursa-engine-a<api>-v<version>-<abi>.zip` on every GitHub
- * release, with a `.sig` made by the app's own release key: the app checks it against
- * its own signing certificate, so only an engine signed like the app itself loads.
+ * The downloaded engine (PDFium plus engine/src/ursa.c) for phones without built-in
+ * search and forms. It is published in the repo's engine/ folder as
+ * `ursa-engine-a<api>-v<version>-<abi>.zip`, listed in engine/latest.json, with a `.sig`
+ * made by the app's own release key: the app checks it against its own signing
+ * certificate, so only an engine signed like the app itself loads.
  *
  * Installed into filesDir/engine/v<version>, files read-only (Android 14 requires that
  * of loaded code), and loaded straight into the running app: no install, no restart.
@@ -60,22 +61,17 @@ object Libraries {
 
     class Asset(val version: Int, val zip: String, val sig: String, val size: Long)
 
-    /** The engine on the latest release for this phone, or null. Network; off the main thread. */
+    private val folder get() = "https://raw.githubusercontent.com/${BuildConfig.UPDATE_REPO}/main/engine"
+
+    /** The published engine for this phone, or null. Network; off the main thread. */
     fun latest(): Asset? {
-        val c = URL("https://api.github.com/repos/${BuildConfig.UPDATE_REPO}/releases/latest").openConnection() as HttpURLConnection
-        c.setRequestProperty("Accept", "application/vnd.github+json")
+        val c = URL("$folder/latest.json").openConnection() as HttpURLConnection
         c.connectTimeout = 10_000; c.readTimeout = 15_000
-        val assets = JSONObject(c.inputStream.bufferedReader().use { it.readText() }).getJSONArray("assets")
-        val urls = HashMap<String, Pair<String, Long>>()
-        for (i in 0 until assets.length()) {
-            val a = assets.getJSONObject(i)
-            urls[a.getString("name")] = a.getString("browser_download_url") to a.optLong("size")
-        }
-        val re = Regex("ursa-engine-a${Pdfium.API}-v(\\d+)-$abi\\.zip")
-        val best = urls.keys.mapNotNull { n -> re.matchEntire(n)?.let { it.groupValues[1].toInt() to n } }.maxByOrNull { it.first } ?: return null
-        val sig = urls["${best.second}.sig"] ?: return null
-        val zip = urls.getValue(best.second)
-        return Asset(best.first, zip.first, sig.first, zip.second)
+        if (c.responseCode == 404) return null
+        val entry = JSONObject(c.inputStream.bufferedReader().use { it.readText() }).optJSONObject(Pdfium.API.toString()) ?: return null
+        val v = entry.getInt("version")
+        val zip = "$folder/ursa-engine-a${Pdfium.API}-v$v-$abi.zip"
+        return Asset(v, zip, "$zip.sig", entry.getJSONObject("sizes").optLong(abi))
     }
 
     /** Download, verify and unpack [a]. Network; off the main thread. Throws with a reason. */

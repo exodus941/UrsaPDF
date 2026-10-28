@@ -113,6 +113,26 @@ class Modal(private val a: Activity, private val host: FrameLayout, private val 
         o.addView(card, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.CENTER).apply {
             leftMargin = a.dpi(32); rightMargin = a.dpi(32)
         })
+        // The window draws behind the keyboard, so nothing makes room for it: the card
+        // rises by half the keyboard's height to centre in what is left, and follows the
+        // keyboard frame by frame as it opens and closes. Android 10 and older resize the
+        // window for the keyboard themselves.
+        if (Build.VERSION.SDK_INT >= 30) {
+            fun lift(ins: android.view.WindowInsets) {
+                val kb = ins.getInsets(android.view.WindowInsets.Type.ime()).bottom
+                val bars = ins.getInsets(android.view.WindowInsets.Type.systemBars()).bottom
+                val up = (kb - bars).coerceAtLeast(0) / 2f
+                // Never past the top: keep a 16 dp margin above the card.
+                val room = (o.height - card.height) / 2f - a.dp(16f)
+                card.translationY = -up.coerceAtMost(room.coerceAtLeast(0f))
+            }
+            o.setOnApplyWindowInsetsListener { _, ins -> lift(ins); ins }
+            o.setWindowInsetsAnimationCallback(object : android.view.WindowInsetsAnimation.Callback(DISPATCH_MODE_CONTINUE_ON_SUBTREE) {
+                override fun onProgress(ins: android.view.WindowInsets, running: MutableList<android.view.WindowInsetsAnimation>): android.view.WindowInsets {
+                    lift(ins); return ins
+                }
+            })
+        }
         host.addView(o, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         overlay = o
         card.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(Motion.MS).setInterpolator(Motion.IN).start()

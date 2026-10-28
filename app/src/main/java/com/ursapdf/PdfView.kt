@@ -37,6 +37,7 @@ class PdfView(ctx: Context) : View(ctx) {
         fun onTurned(page: Int)
         fun onTap(x: Float, y: Float)
         fun onVerticalSwipe()
+        fun onFieldTap(page: Int, f: Field) {}
     }
 
     companion object {
@@ -398,7 +399,9 @@ class PdfView(ctx: Context) : View(ctx) {
         }
 
         private fun tap(e: MotionEvent) {
-            if (drag == Drag.NONE && shift == 0f) listener?.onTap(e.x, e.y)
+            if (drag != Drag.NONE || shift != 0f) return
+            if (formMode) fieldAt(e.x, e.y)?.let { listener?.onFieldTap(currentPage, it); return }
+            listener?.onTap(e.x, e.y)
         }
     // No long-press action exists, and a detected long press drops every later move:
     // a held quick-scale drag froze after 400 ms.
@@ -514,6 +517,7 @@ class PdfView(ctx: Context) : View(ctx) {
 
         drawPage(canvas, e, cur, left() + shift, top(), zoom, want, tiles)
         drawHits(canvas, e, cur, left() + shift, top(), zoom)
+        drawFields(canvas, e, cur, left() + shift, top(), zoom)
         val step = width + gap
         if (shift < 0 && cur + 1 < n) { drawPage(canvas, e, cur + 1, fitLeft(cur + 1) + shift + step, fitTop(cur + 1), 1f, want, null); drawHits(canvas, e, cur + 1, fitLeft(cur + 1) + shift + step, fitTop(cur + 1), 1f) }
         if (shift > 0 && cur > 0) { drawPage(canvas, e, cur - 1, fitLeft(cur - 1) + shift - step, fitTop(cur - 1), 1f, want, null); drawHits(canvas, e, cur - 1, fitLeft(cur - 1) + shift - step, fitTop(cur - 1), 1f) }
@@ -521,7 +525,7 @@ class PdfView(ctx: Context) : View(ctx) {
         want += tiles
         for (p in intArrayOf(cur + 1, cur - 1, cur + 2, cur - 2)) {
             if (p < 0 || p >= n) continue
-            if (e.base.get(PdfEngine.key(PdfEngine.BASE, p)) == null) want += baseReq(e, p)
+            if (e.needs(PdfEngine.key(PdfEngine.BASE, p))) want += baseReq(e, p)
         }
         e.submit(PdfEngine.Q_VIEW, want)
     }
@@ -575,18 +579,108 @@ class PdfView(ctx: Context) : View(ctx) {
         }
     }
 
+    // ---- form fields ----
+
+    /** Edit mode: fields are outlined and taps on them go to [Listener.onFieldTap]. */
+    var formMode = false
+        set(v) { field = v; invalidate() }
+    /** Fields of the pages loaded so far. */
+    var fields: Map<Int, List<Field>> = emptyMap()
+        set(v) { field = v; invalidate() }
+    /**
+     * Fields whose value changed, painted over the page by the view itself. Only for an
+     * engine whose page renders cannot show edits (the downloaded one).
+     */
+    var paintEdits: Map<Int, List<Field>> = emptyMap()
+        set(v) { field = v; invalidate() }
+    private val fieldTint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val fieldLine = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = ctx.dp(1.5f) }
+    private val editFill = Paint().apply { color = Color.WHITE }
+    private val editInk = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK }
+    private val editTick = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND }
+    private val fr = RectF()
+
+    private fun pageScale(i: Int, z: Float) = fit[i] * z
+    private fun toScreen(e: PdfEngine, i: Int, x: Float, y: Float, z: Float, r: RectF, out: RectF) {
+        val s = pageScale(i, z)
+        val ox = x - e.crop.left * e.pw[i] * s
+        val oy = y - e.crop.top * e.ph[i] * s
+        out.set(ox + r.left * s, oy + r.top * s, ox + r.right * s, oy + r.bottom * s)
+    }
+
+    /** The editable field under screen point (x, y) on the current page. */
+    private fun fieldAt(x: Float, y: Float): Field? {
+        val e = eng ?: return null
+        val list = fields[currentPage] ?: return null
+        val slop = context.dp(6f)
+        return list.lastOrNull { f ->
+            toScreen(e, currentPage, left() + shift, top(), zoom, f.rect, fr)
+            fr.inset(-slop, -slop)
+            fr.contains(x, y)
+        }
+    }
+
+    private fun drawFields(c: Canvas, e: PdfEngine, i: Int, x: Float, y: Float, z: Float) {
+        editFill.colorFilter = e.filter; editInk.colorFilter = e.filter; editTick.colorFilter = e.filter
+        paintEdits[i]?.forEach { f ->
+            if (f.type == Pdfium.PUSHBUTTON || f.type == Pdfium.SIGNATURE || f.type == 0) return@forEach
+            toScreen(e, i, x, y, z, f.rect, fr)
+            // Inside the field's own border (about 1.5 pt), which the page already drew.
+            val inset = pageScale(i, z) * 1.5f
+            fr.inset(inset, inset)
+            // Boxes and circles keep their drawn outline; only text-bearing fields are cleared.
+            if (f.type != Pdfium.CHECKBOX && f.type != Pdfium.RADIOBUTTON) c.drawRect(fr, editFill)
+            when (f.type) {
+                Pdfium.CHECKBOX, Pdfium.RADIOBUTTON -> if (f.checked) {
+                    val m = fr.width().coerceAtMost(fr.height())
+                    editTick.strokeWidth = m * 0.14f
+                    if (f.type == Pdfium.RADIOBUTTON) { editInk.style = Paint.Style.FILL; c.drawCircle(fr.centerX(), fr.centerY(), m * 0.28f, editInk) }
+                    else {
+                        val cx = fr.centerX(); val cy = fr.centerY(); val h = m * 0.32f
+                        c.drawLine(cx - h, cy, cx - h * 0.3f, cy + h * 0.7f, editTick)
+                        c.drawLine(cx - h * 0.3f, cy + h * 0.7f, cx + h, cy - h * 0.7f, editTick)
+                    }
+                }
+                else -> {
+                    val text = if (f.type == Pdfium.TEXTFIELD) f.value else f.selected.firstOrNull()?.let { f.options.getOrNull(it) } ?: f.value
+                    editInk.style = Paint.Style.FILL
+                    editInk.textSize = (if (f.multiline) z * fit[i] * 10f else fr.height() * 0.62f).coerceAtMost(fr.height() * 0.8f)
+                    c.save(); c.clipRect(fr)
+                    val pad = if (f.multiline) pageScale(i, z) * 2f else fr.height() * 0.15f
+                    if (f.multiline) {
+                        var ty = fr.top + editInk.textSize
+                        for (line in text.split('\n')) { c.drawText(line, fr.left + pad, ty, editInk); ty += editInk.textSize * 1.2f }
+                    } else c.drawText(text, fr.left + pad, fr.centerY() + editInk.textSize * 0.35f, editInk)
+                    c.restore()
+                }
+            }
+        }
+        if (!formMode) return
+        val ink = Theme.accentInk()
+        fieldTint.color = ink; fieldTint.alpha = 28
+        fieldLine.color = ink
+        fields[i]?.forEach { f ->
+            if (!f.editable) return@forEach
+            toScreen(e, i, x, y, z, f.rect, fr)
+            c.drawRect(fr, fieldTint)
+            c.drawRect(fr, fieldLine)
+        }
+    }
+
     private fun fitLeft(i: Int) = (width - dw[i]) / 2
     private fun fitTop(i: Int) = (height - dh[i]) / 2
 
     private fun drawPage(c: Canvas, e: PdfEngine, i: Int, x: Float, y: Float, z: Float, want: MutableList<Req>, tiles: MutableList<Req>?) {
         dst.set(x, y, x + dw[i] * z, y + dh[i] * z)
-        val b = e.base.get(PdfEngine.key(PdfEngine.BASE, i))
+        val bk = PdfEngine.key(PdfEngine.BASE, i)
+        val b = e.base.get(bk)
         if (b != null) c.drawBitmap(b, null, dst, bmpPaint) else {
             // A thumbnail stretched over the page beats a blank sheet while it renders.
             val t = e.thumbs.get(PdfEngine.key(PdfEngine.THUMB, i))
             if (t != null) c.drawBitmap(t, null, dst, bmpPaint) else c.drawRect(dst, white)
-            want += baseReq(e, i)
         }
+        // A stale bitmap (page edited since) keeps drawing until its replacement lands.
+        if (e.needs(bk)) want += baseReq(e, i)
         if (tiles == null || scaling || !scroller.isFinished || shift != 0f || z <= 1.05f) return
 
         val w = width.toFloat(); val h = height.toFloat()
@@ -607,9 +701,8 @@ class PdfView(ctx: Context) : View(ctx) {
                 if (t != null) {
                     tdst.set(dst.left + tx * span, dst.top + ty * span, dst.left + (tx + 1) * span, dst.top + (ty + 1) * span)
                     c.drawBitmap(t, null, tdst, bmpPaint)
-                } else {
-                    tiles += e.req(PdfEngine.TILE, i, li, tx, ty, TILE, TILE, s, tx * TILE.toFloat(), ty * TILE.toFloat())
                 }
+                if (e.needs(tk)) tiles += e.req(PdfEngine.TILE, i, li, tx, ty, TILE, TILE, s, tx * TILE.toFloat(), ty * TILE.toFloat())
             }
         }
         c.restore()

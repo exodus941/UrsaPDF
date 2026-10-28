@@ -25,6 +25,7 @@ import java.io.File
 class Req(
     val key: Long, val gen: Int, val page: Int, val w: Int, val h: Int,
     val scale: Float, val x: Float, val y: Float, val cropL: Float, val cropT: Float,
+    val pageGen: Int = 0,
 )
 
 class BitmapCache(bytes: Int) : LruCache<Long, Bitmap>(bytes) {
@@ -101,7 +102,6 @@ class PdfEngine private constructor(private val pfd: ParcelFileDescriptor, priva
         val mb = (mc / 3).coerceIn(32, 96)
         base = BitmapCache(mb shl 20)
         tiles = BitmapCache(mb shl 20)
-        Thread(::loop, "ursa-render").apply { priority = Thread.NORM_PRIORITY + 1; start() }
     }
 
     // Thumbnail box. The strip and the page view (while a page renders) share these bitmaps.
@@ -124,8 +124,48 @@ class PdfEngine private constructor(private val pfd: ParcelFileDescriptor, priva
     }
 
     fun req(kind: Int, page: Int, level: Int, tx: Int, ty: Int, w: Int, h: Int, scale: Float, x: Float = 0f, y: Float = 0f) =
-        if (kind == FULL) Req(key(kind, page, level, tx, ty), gen, page, w, h, scale, x, y, 0f, 0f)
-        else Req(key(kind, page, level, tx, ty), gen, page, w, h, scale, x, y, crop.left, crop.top)
+        if (kind == FULL) Req(key(kind, page, level, tx, ty), gen, page, w, h, scale, x, y, 0f, 0f, pageGen[page])
+        else Req(key(kind, page, level, tx, ty), gen, page, w, h, scale, x, y, crop.left, crop.top, pageGen[page])
+
+    // ---- per-page refresh, after a form edit changes a page ----
+    // The old bitmaps keep drawing until the new ones land, so the page never blanks.
+
+    private val pageGen = IntArray(pageCount)
+    private val stale = HashSet<Long>()
+
+    fun pageOf(key: Long) = ((key ushr 36) and 0xFFFFFF).toInt()
+
+    /** True when [key] has no bitmap yet, or only one from before its page changed. */
+    fun needs(key: Long) = cacheFor(key).get(key) == null || key in stale
+
+    fun refreshPage(i: Int) {
+        pageGen[i]++
+        for (c in listOf(base, tiles, thumbs)) for (k in c.snapshot().keys) if (pageOf(k) == i) stale += k
+        notifyListeners()
+    }
+
+    // ---- work that must run on the render thread (PdfRenderer is single-threaded) ----
+
+    private val tasks = ArrayDeque<() -> Unit>()   // guarded by lock
+
+    /** Run [task] on the render thread, ahead of pending renders. */
+    fun run(task: () -> Unit) = synchronized(lock) { tasks.addLast(task); lock.notify() }
+
+    /** Render thread only: the open page [i]. */
+    fun workerPage(i: Int) = page(i)
+
+    /** Render thread only: write the document, form edits included, to [out]. */
+    @android.annotation.SuppressLint("NewApi")
+    fun workerWrite(out: ParcelFileDescriptor) = renderer.write(out, false)
+
+    /** A second descriptor on the open file, for the downloaded engine (reads are positional). */
+    fun dupFd(): Int = pfd.dup().detachFd()
+
+    fun post(r: () -> Unit) = main.post(r)
+
+    /** Built-in form type (PDF_FORM_TYPE_*), or -1 where the system renderer has no forms. */
+    @android.annotation.SuppressLint("NewApi")
+    val formType: Int = if (Features.builtIn) try { renderer.pdfFormType } catch (e: Throwable) { -1 } else -1
 
     fun cacheFor(key: Long) = when (kindOf(key)) {
         TILE -> tiles
@@ -163,7 +203,7 @@ class PdfEngine private constructor(private val pfd: ParcelFileDescriptor, priva
     /** Drop every cached bitmap; in-flight results of the old generation are discarded. */
     fun reset() {
         gen++
-        base.evictAll(); tiles.evictAll(); thumbs.evictAll()
+        base.evictAll(); tiles.evictAll(); thumbs.evictAll(); stale.clear()
         synchronized(lock) { queues.forEach { it.clear() } }
         notifyListeners()
     }
@@ -181,8 +221,7 @@ class PdfEngine private constructor(private val pfd: ParcelFileDescriptor, priva
     // A search runs one page at a time on the worker, after any pending renders, so a
     // long document stays responsive while it is searched.
 
-    val canSearch = Build.VERSION.SDK_INT >= 35 ||
-        (Build.VERSION.SDK_INT >= 30 && SdkExtensions.getExtensionVersion(Build.VERSION_CODES.S) >= 13)
+    val canSearch = Features.builtIn
 
     private var searchQ: String? = null   // guarded by lock
     private var searchGen = 0             // guarded by lock
@@ -207,19 +246,27 @@ class PdfEngine private constructor(private val pfd: ParcelFileDescriptor, priva
             var q: String? = null
             var qPage = 0
             var qGen = 0
+            var task: (() -> Unit)? = null
             synchronized(lock) {
-                while (!closed && queues.all { it.isEmpty() } && searchQ == null) lock.wait()
+                while (!closed && queues.all { it.isEmpty() } && searchQ == null && tasks.isEmpty()) lock.wait()
                 if (closed) {
                     openPage?.close(); renderer.close(); pfd.close()
                     return
                 }
-                if (queues.any { it.isNotEmpty() }) {
+                if (tasks.isNotEmpty()) {
+                    task = tasks.removeFirst()
+                } else if (queues.any { it.isNotEmpty() }) {
                     next = queues.first { it.isNotEmpty() }.removeFirst()
                     busy.add(next!!.key)
                 } else {
                     q = searchQ; qPage = searchNext++; qGen = searchGen
                     if (searchNext >= pageCount) searchQ = null
                 }
+            }
+            val t = task
+            if (t != null) {
+                try { t() } catch (e: Throwable) { android.util.Log.w("ursa", "task failed", e) }
+                continue
             }
             val job = next
             if (job == null) {
@@ -232,7 +279,10 @@ class PdfEngine private constructor(private val pfd: ParcelFileDescriptor, priva
             main.post {
                 synchronized(lock) { busy.remove(r.key) }
                 if (closed) return@post
-                if (bmp != null && r.gen == gen) cacheFor(r.key).put(r.key, bmp)
+                if (bmp != null && r.gen == gen && r.pageGen == pageGen[r.page]) {
+                    cacheFor(r.key).put(r.key, bmp)
+                    stale -= r.key
+                }
                 notifyListeners()
             }
         }
@@ -273,4 +323,7 @@ class PdfEngine private constructor(private val pfd: ParcelFileDescriptor, priva
         bmp.prepareToDraw()   // start the GPU upload now, not on the frame that draws it
         return bmp
     }
+
+    // Last, so every field the render thread touches already exists.
+    init { Thread(::loop, "ursa-render").apply { priority = Thread.NORM_PRIORITY + 1; start() } }
 }

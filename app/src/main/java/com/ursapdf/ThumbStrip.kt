@@ -104,13 +104,13 @@ class ThumbStrip(ctx: Context, private val eng: PdfEngine, private val onPick: (
             val k = PdfEngine.key(PdfEngine.THUMB, i)
             val b = eng.thumbs.get(k)
             if (b != null) canvas.drawBitmap(b, null, r, bmpPaint) else canvas.drawRect(r, white)
-            if (b == null) want += eng.thumbReq(i)
+            if (eng.needs(k)) want += eng.thumbReq(i)
             if (i == current) canvas.drawRect(r, frame)
             canvas.drawText("${i + 1}", cx, hh - labelH * 0.3f, if (i == current) textOn else text)
         }
         // Prefetch a few on each side.
         for (i in (first - 4 until first) + (last + 1..last + 4)) {
-            if (i < 0 || i >= n || eng.thumbs.get(PdfEngine.key(PdfEngine.THUMB, i)) != null) continue
+            if (i < 0 || i >= n || !eng.needs(PdfEngine.key(PdfEngine.THUMB, i))) continue
             want += eng.thumbReq(i)
         }
         eng.submit(PdfEngine.Q_THUMB, want)

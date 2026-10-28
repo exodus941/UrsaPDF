@@ -6,7 +6,7 @@ plugins {
 }
 
 // CI passes -PversionName=1.2.3 from the git tag.
-val vName = (findProperty("versionName") as String?) ?: "1.4.1"
+val vName = (findProperty("versionName") as String?) ?: "1.5.0"
 val vCode = vName.split(".").map { it.toInt() }.let { it[0] * 10000 + it[1] * 100 + it[2] }
 
 val ksProps = Properties().apply {

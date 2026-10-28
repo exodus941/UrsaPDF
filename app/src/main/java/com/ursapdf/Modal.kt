@@ -29,15 +29,29 @@ class Modal(private val a: Activity, private val host: FrameLayout, private val 
     val showing get() = overlay != null
 
     fun confirm(title: String, message: String, action: String, onOk: () -> Unit) =
-        open(title, message, null, action) { onOk() }
+        open(title, message, null, action, onOk = { onOk() })
 
     /** A text field prefilled with [initial]; [onOk] gets the trimmed text. */
     fun input(title: String, initial: String, action: String, onOk: (String) -> Unit) =
         open(title, null, initial, action, onOk)
 
+    /** A multi-line text box, for form fields that hold paragraphs. */
+    fun inputLines(title: String, initial: String, action: String, onOk: (String) -> Unit) =
+        open(title, null, initial, action, onOk, multiline = true)
+
+    /**
+     * Stacked full-width choices; tapping outside or Back picks none. The first choice
+     * is drawn as the primary one.
+     */
+    fun choose(title: String, message: String?, choices: List<Pair<String, () -> Unit>>) =
+        open(title, message, null, "", {}, choices = choices)
+
     fun cancel() = close()
 
-    private fun open(title: String, message: String?, initial: String?, action: String, onOk: (String) -> Unit) {
+    private fun open(
+        title: String, message: String?, initial: String?, action: String, onOk: (String) -> Unit,
+        choices: List<Pair<String, () -> Unit>>? = null, multiline: Boolean = false,
+    ) {
         if (showing) return
         val scrim = View(a).apply { setBackgroundColor(0xFF000000.toInt()); alpha = 0f }
         val card = LinearLayout(a).apply {
@@ -55,11 +69,17 @@ class Modal(private val a: Activity, private val host: FrameLayout, private val 
                 setText(it)
                 setTextColor(Theme.text())
                 textSize = 16f
-                isSingleLine = true
-                inputType = InputType.TYPE_CLASS_TEXT
-                imeOptions = EditorInfo.IME_ACTION_DONE
-                // Select the name without its extension, the part a person usually changes.
-                setSelection(0, it.lastIndexOf('.').takeIf { i -> i > 0 } ?: it.length)
+                if (multiline) {
+                    inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                    minLines = 3; maxLines = 8
+                    setSelection(it.length)
+                } else {
+                    isSingleLine = true
+                    inputType = InputType.TYPE_CLASS_TEXT
+                    imeOptions = EditorInfo.IME_ACTION_DONE
+                    // Select the name without its extension, the part a person usually changes.
+                    setSelection(0, it.lastIndexOf('.').takeIf { i -> i > 0 } ?: it.length)
+                }
             }.also { f -> card.addView(f, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = a.dpi(12) }) }
         }
         val buttons = LinearLayout(a).apply { gravity = Gravity.END; setPadding(0, a.dpi(16), 0, 0) }
@@ -68,11 +88,25 @@ class Modal(private val a: Activity, private val host: FrameLayout, private val 
             setPadding(a.dpi(16), a.dpi(12), a.dpi(16), a.dpi(12))
             setOnClickListener { act() }
         }
-        buttons.addView(button("Cancel", Theme.sub()) { close() })
-        val ok = { close(); onOk(field?.text?.toString()?.trim() ?: "") }
-        buttons.addView(button(action, Theme.accentInk()) { ok() })
-        field?.setOnEditorActionListener { _, id, _ -> if (id == EditorInfo.IME_ACTION_DONE) { ok(); true } else false }
-        card.addView(buttons)
+        if (choices != null) {
+            val stack = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; setPadding(0, a.dpi(16), 0, a.dpi(4)) }
+            choices.forEachIndexed { k, (label, act) ->
+                stack.addView(a.label(label, 15f, if (k == 0) BG else Theme.text(), bold = true).apply {
+                    gravity = Gravity.CENTER
+                    background = a.pill(if (k == 0) ACCENT else Theme.button(), 14f)
+                    foreground = a.ripple()
+                    setPadding(a.dpi(16), a.dpi(12), a.dpi(16), a.dpi(12))
+                    setOnClickListener { close(); act() }
+                }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { if (k > 0) topMargin = a.dpi(8) })
+            }
+            card.addView(stack)
+        } else {
+            buttons.addView(button("Cancel", Theme.sub()) { close() })
+            val ok = { close(); onOk(field?.text?.toString()?.let { if (multiline) it else it.trim() } ?: "") }
+            buttons.addView(button(action, Theme.accentInk()) { ok() })
+            field?.setOnEditorActionListener { _, id, _ -> if (id == EditorInfo.IME_ACTION_DONE) { ok(); true } else false }
+            card.addView(buttons)
+        }
 
         val o = FrameLayout(a).apply { isClickable = true; setOnClickListener { close() } }
         o.addView(scrim, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))

@@ -59,6 +59,16 @@ class ReaderActivity : Activity(), PdfView.Listener {
     private val results = ArrayList<Pair<Int, Int>>()       // page, match index on that page
     private val hits = HashMap<Int, List<List<RectF>>>()
     private var at = -1
+    // Search and forms, from the system renderer or the downloaded engine.
+    private var tools: Tools? = null
+    private lateinit var editBtn: ImageView
+    private lateinit var modal: Modal
+    private val fieldsNow = HashMap<Int, List<Field>>()       // as edited
+    private val fieldsFirst = HashMap<Int, List<Field>>()     // as opened, to tell what changed
+    private var dirty = false
+    private var isForm = false
+    private var closing = false
+    private val saveAs = 21
     private lateinit var flash: TextView
     private val onTheme: () -> Unit = { applyTheme() }
     private var invertAnim: ValueAnimator? = null
@@ -121,7 +131,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
             contentDescription = name
             setOnClickListener { act() }
         }
-        backBtn = iconButton(R.drawable.ic_back, "Back") { goHome() }
+        backBtn = iconButton(R.drawable.ic_back, "Back") { closeReader() }
         top.addView(backBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)))
         titleView = label("", 16f, Theme.text()).apply {
             maxLines = 1
@@ -132,6 +142,9 @@ class ReaderActivity : Activity(), PdfView.Listener {
         top.addView(searchBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)))
         cropBtn = iconButton(R.drawable.ic_crop, "Page Cropper") { openCropper() }
         top.addView(cropBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)))
+        // Only for PDFs that are forms; shown once the open document says so.
+        editBtn = iconButton(R.drawable.ic_rename, "Fill in Form") { toggleForm() }.apply { visibility = View.GONE }
+        top.addView(editBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)))
         invertBtn = iconButton(R.drawable.ic_invert, "Invert Colours") { toggleInvert() }
         top.addView(invertBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)))
         themeBtn = iconButton(R.drawable.ic_bulb_on, "Toggle Light Mode") { Theme.toggle(this) }
@@ -172,8 +185,10 @@ class ReaderActivity : Activity(), PdfView.Listener {
             insets = ins.safe()
             top.setPadding(insets[0], insets[1], insets[2], 0)
             // The search strip rides on the keyboard while it is up.
-            val ime = if (android.os.Build.VERSION.SDK_INT >= 30) ins.getInsets(android.view.WindowInsets.Type.ime()).bottom else 0
-            search.setPadding(insets[0], 0, insets[2], maxOf(insets[3], ime))
+            // Android 11+ reports the keyboard as its own inset; older versions fold it into the window inset.
+            @Suppress("DEPRECATION")
+            val ime = if (android.os.Build.VERSION.SDK_INT >= 30) ins.getInsets(android.view.WindowInsets.Type.ime()).bottom else ins.systemWindowInsetBottom
+            if (android.os.Build.VERSION.SDK_INT >= 30) search.setPadding(insets[0], 0, insets[2], maxOf(insets[3], ime))
             (flash.layoutParams as FrameLayout.LayoutParams).bottomMargin = dpi(32) + insets[3]
             flash.requestLayout()
             strip?.setPadding(insets[0], 0, insets[2], 0)
@@ -185,6 +200,16 @@ class ReaderActivity : Activity(), PdfView.Listener {
             ins
         }
         setContentView(root)
+        modal = Modal(this, root, pdf)
+        // Android 10 and older give a full-screen window no keyboard inset; the part of the
+        // window the keyboard leaves visible is the measure that works there.
+        if (android.os.Build.VERSION.SDK_INT < 30) root.viewTreeObserver.addOnGlobalLayoutListener {
+            val r = android.graphics.Rect()
+            root.getWindowVisibleDisplayFrame(r)
+            val kb = (root.rootView.height - r.bottom).coerceAtLeast(0)
+            val want = maxOf(insets[3], kb)
+            if (search.paddingBottom != want) search.setPadding(insets[0], 0, insets[2], want)
+        }
     }
 
     private fun opened(e: PdfEngine) {
@@ -219,7 +244,16 @@ class ReaderActivity : Activity(), PdfView.Listener {
         }
         scrubber = sc
         bottom.addView(sc, LinearLayout.LayoutParams(MATCH_PARENT, dpi(32) + insets[3]))
-        searchBtn.visibility = if (e.canSearch) View.VISIBLE else View.GONE
+        // Older phones: the engine is in place once the home list has downloaded it.
+        if (!Features.builtIn) Libraries.load(this)
+        val t = Tools.of(e)
+        tools = t
+        searchBtn.visibility = if (t?.canSearch == true) View.VISIBLE else View.GONE
+        t?.isForm { form ->
+            editBtn.visibility = if (form) View.VISIBLE else View.GONE
+            isForm = form
+            if (form && !t.live) loadFields(pdf.currentPage)
+        }
         applyTheme()
         updatePill()
         Store.put(this, s)
@@ -241,7 +275,10 @@ class ReaderActivity : Activity(), PdfView.Listener {
         scrubber?.current = pdf.currentPage
     }
 
-    override fun onPageChanged(page: Int) = updatePill()
+    override fun onPageChanged(page: Int) {
+        updatePill()
+        if (pdf.formMode || dirty || (isForm && tools?.live == false)) loadFields(page)
+    }
 
     /**
      * After a swipe: fade the page pill in (250 ms), hold 0.625 s, fade out
@@ -273,13 +310,14 @@ class ReaderActivity : Activity(), PdfView.Listener {
         fieldRow.findViewWithTag<View>("box").background = pill(Theme.button(), 14f)
         field.setTextColor(Theme.text()); field.setHintTextColor(Theme.sub())
         count.setTextColor(Theme.text())
-        for (b in listOf(backBtn, searchBtn, cropBtn, themeBtn, goBtn, closeBtn, prevBtn, nextBtn)) {
+        for (b in listOf(backBtn, searchBtn, cropBtn, editBtn, themeBtn, goBtn, closeBtn, prevBtn, nextBtn)) {
             b.setColorFilter(Theme.text())
             (b.background as? android.graphics.drawable.RippleDrawable)?.setColor(android.content.res.ColorStateList.valueOf(Theme.ripple()))
         }
         themeBtn.setImageResource(if (Theme.light) R.drawable.ic_bulb_off else R.drawable.ic_bulb_on)
         themeBtn.contentDescription = if (Theme.light) "Toggle Dark Mode" else "Toggle Light Mode"
         paintInvertButton()
+        if (::editBtn.isInitialized) paintEditButton()
         for (p in listOf(badge, flash)) {
             p.setTextColor(Theme.text())
             p.background = pill(Theme.panel(), 14f)
@@ -396,6 +434,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
         invertAnim?.cancel()
         Theme.listeners -= onTheme
         flash.removeCallbacks(hideFlash)
+        tools?.close()
         eng?.close()
         eng = null
     }
@@ -424,8 +463,11 @@ class ReaderActivity : Activity(), PdfView.Listener {
             background = null
             imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
             setPadding(dpi(16), dpi(12), dpi(8), dpi(12))
-            setOnEditorActionListener { _, id, _ ->
-                if (id == android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH) { runSearch(); true } else false
+            // The keyboard sends Search; a hardware or older keyboard sends a plain Enter key.
+            setOnEditorActionListener { _, id, ev ->
+                val enter = ev?.keyCode == android.view.KeyEvent.KEYCODE_ENTER && ev.action == android.view.KeyEvent.ACTION_DOWN
+                if (id == android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH || enter) { runSearch(); true } else false
+
             }
         }
         box.addView(field, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
@@ -459,7 +501,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
 
     /** The page strip slides out, then the search strip rises in its place (%ease250% each). */
     private fun openSearch() {
-        if (searching || eng?.canSearch != true) return
+        if (searching || tools?.canSearch != true) return
         searching = true; resultsShown = false
         navRow.alpha = 0f
         bottom.animate().translationY(bottom.height.toFloat()).setDuration(Motion.MS).setInterpolator(Motion.OUT).withEndAction {
@@ -473,22 +515,18 @@ class ReaderActivity : Activity(), PdfView.Listener {
 
     /** Search every page; the strip rises further to show previous / count / next. */
     private fun runSearch() {
-        val e = eng ?: return
+        val t = tools ?: return
         val q = field.text.toString().trim()
         if (q.isEmpty()) return
         keyboard(false)
         results.clear(); hits.clear(); at = -1; searchDone = false
         pdf.hits = hits; pdf.focusHit = null
-        searchGen = e.search(q)
-        e.onMatches = { g, page, rects ->
-            if (g == searchGen) {
-                hits[page] = rects
-                for (k in rects.indices) results += page to k
-                pdf.hits = hits
-                if (at < 0) goTo(0) else updateCount()
-            }
-        }
-        e.onSearchDone = { g -> if (g == searchGen) { searchDone = true; updateCount() } }
+        t.search(q, { page, rects ->
+            hits[page] = rects
+            for (k in rects.indices) results += page to k
+            pdf.hits = hits
+            if (at < 0) goTo(0) else updateCount()
+        }, { searchDone = true; updateCount() })
         updateCount()
         if (!resultsShown) {
             resultsShown = true
@@ -532,7 +570,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
     private fun closeSearch() {
         if (!searching) return
         searching = false; resultsShown = false
-        eng?.search(null)
+        tools?.search(null, { _, _ -> }, {})
         results.clear(); hits.clear(); at = -1
         pdf.hits = emptyMap(); pdf.focusHit = null
         pdf.setBand(0f, 0f)
@@ -543,14 +581,161 @@ class ReaderActivity : Activity(), PdfView.Listener {
         top.animate().translationY(-top.height.toFloat()).setDuration(Motion.MS).setInterpolator(Motion.OUT).start()
     }
 
+    // ---- forms ----
+
+    /** The pencil: outline the fields and send taps on them here, or stop. */
+    private fun toggleForm() {
+        val on = !pdf.formMode
+        pdf.formMode = on
+        paintEditButton()
+        if (on) {
+            hideUi()
+            loadFields(pdf.currentPage)
+            showFlash("Tap a field to fill it in")
+        }
+    }
+
+    private fun paintEditButton() = editBtn.setColorFilter(if (pdf.formMode) Theme.accentInk() else Theme.text())
+
+    private fun loadFields(page: Int) {
+        if (fieldsNow.containsKey(page)) return
+        tools?.fields(page) { f ->
+            fieldsFirst.putIfAbsent(page, f)
+            fieldsNow[page] = f
+            publishFields()
+        }
+    }
+
+    /**
+     * Hand the view its fields. With the downloaded engine the view paints every field's
+     * value itself: the older system renderer draws no form values at all, so even a
+     * form opened unchanged would look empty.
+     */
+    private fun publishFields() {
+        pdf.fields = HashMap(fieldsNow)
+        if (tools?.live == false) pdf.paintEdits = HashMap(fieldsNow)
+    }
+
+    private fun edited(page: Int, f: List<Field>) {
+        if (f.isEmpty()) return
+        fieldsNow[page] = f
+        dirty = true
+        publishFields()
+    }
+
+    override fun onFieldTap(page: Int, f: Field) {
+        val t = tools ?: return
+        if (!f.editable) {
+            toast(if (f.type == Pdfium.SIGNATURE) "Signature fields can’t be filled in here" else "This field can’t be changed")
+            return
+        }
+        val title = f.label.ifEmpty { "Field" }
+        when (f.type) {
+            Pdfium.TEXTFIELD -> {
+                val done: (String) -> Unit = { v -> if (v != f.value) t.setText(page, f, v) { edited(page, it) } }
+                if (f.multiline) modal.inputLines(title, f.value, "Done", done) else modal.input(title, f.value, "Done", done)
+            }
+            Pdfium.CHECKBOX, Pdfium.RADIOBUTTON -> t.click(page, f) { edited(page, it) }
+            Pdfium.COMBOBOX, Pdfium.LISTBOX -> if (f.options.isNotEmpty()) {
+                modal.choose(title, null, f.options.mapIndexed { k, o ->
+                    (if (k in f.selected) "✓  $o" else o) to { t.choose(page, f, k) { edited(page, it) } }
+                })
+            }
+        }
+    }
+
+    /** Closing with unsaved edits asks first. */
+    private fun closeReader() {
+        if (!dirty) { goHome(); return }
+        modal.choose("Save your changes?", "This form has changes that are not saved.", listOf(
+            "Save Changes to File" to { saveInPlace() },
+            "Save as New File" to { askNewFile() },
+            "Close Without Saving" to { dirty = false; goHome() },
+        ))
+    }
+
+    private fun saveToTemp(then: (java.io.File) -> Unit) {
+        val out = java.io.File(cacheDir, "save.pdf")
+        tools?.save(out) { ok -> if (ok) then(out) else toast("Couldn’t save this form") }
+    }
+
+    private fun saveInPlace() = saveToTemp { tmp ->
+        val ok = try {
+            contentResolver.openOutputStream(uri, "wt")!!.use { o -> tmp.inputStream().use { it.copyTo(o) } }
+            true
+        } catch (e: Exception) { false }
+        tmp.delete()
+        if (ok) {
+            dirty = false
+            state?.let { it.size = tmp.length().takeIf { l -> l > 0 } ?: it.size }
+            toast("Saved “${state?.name}”")
+            goHome()
+        } else {
+            toast("This file can’t be changed in place; choose where to save a copy")
+            askNewFile()
+        }
+    }
+
+    private fun askNewFile() {
+        val base = state?.name?.removeSuffix(".pdf")?.removeSuffix(".PDF") ?: "Form"
+        @Suppress("DEPRECATION")
+        startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/pdf"
+            putExtra(Intent.EXTRA_TITLE, "$base (filled).pdf")
+        }, saveAs)
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(req: Int, res: Int, data: Intent?) {
+        @Suppress("DEPRECATION")
+        super.onActivityResult(req, res, data)
+        val target = data?.data
+        if (req != saveAs || res != RESULT_OK || target == null) return
+        saveToTemp { tmp ->
+            val ok = try {
+                contentResolver.openOutputStream(target, "wt")!!.use { o -> tmp.inputStream().use { it.copyTo(o) } }
+                true
+            } catch (e: Exception) { false }
+            if (!ok) { tmp.delete(); toast("Couldn’t write the new file"); return@saveToTemp }
+            try {
+                contentResolver.takePersistableUriPermission(target, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            } catch (_: Exception) {}
+            val name = try {
+                contentResolver.query(target, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+            } catch (_: Exception) { null } ?: "Filled form.pdf"
+            Store.put(this, DocState(target.toString(), name).also { d ->
+                d.pages = eng?.pageCount ?: 0
+                d.size = tmp.length()
+                state?.let { s -> d.crop.set(s.crop); d.page = pdf.currentPage }
+                d.opened = System.currentTimeMillis()
+            })
+            tmp.delete()
+            dirty = false
+            toast("Saved as “$name”")
+            goHome()
+        }
+    }
+
+    private fun toast(t: String) = Toast.makeText(this, t, Toast.LENGTH_SHORT).show()
+
+    private fun showFlash(text: String) {
+        flash.text = text
+        flash.removeCallbacks(hideFlash)
+        flash.animate().cancel()
+        flash.animate().alpha(1f).setDuration(Motion.MS).setInterpolator(Motion.FADE).start()
+        flash.postDelayed(hideFlash, Motion.MS + 1500L)
+    }
+
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         when {
+            modal.showing -> modal.cancel()
             cropper != null -> closeCropper(null)
             // While viewing results, Back steps back one result; from the first, it closes.
             searching && resultsShown && at > 0 -> step(-1)
             searching -> closeSearch()
-            else -> goHome()
+            else -> closeReader()
         }
     }
 

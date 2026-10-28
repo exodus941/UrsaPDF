@@ -1,5 +1,9 @@
 # Third-party notices
 
+## PDFium, and pdfium-binaries by Benoît Blanchon
+
+The downloadable engine (`ursa-engine-*.zip` on each release, built by `engine/build.sh`) contains PDFium, https://pdfium.googlesource.com/pdfium/, as prebuilt for Android by pdfium-binaries (chromium/8125), https://github.com/bblanchon/pdfium-binaries. PDFium is under the BSD 3-Clause licence; pdfium-binaries is under the MIT licence. The libraries PDFium bundles (FreeType, libjpeg-turbo, OpenJPEG, libpng, zlib, lcms, ICU, HarfBuzz, Abseil and others) keep their own licences. Every licence text ships inside each engine zip, in its `licenses/` folder. The app itself contains none of this code.
+
 ## Five by Five, by jeti
 
 The "PDF" lettering in the launcher icon (`app/src/main/res/drawable/ic_bear.xml`) is drawn from the Five by Five pixel font by jeti, https://fontenddev.com/fonts/five-by-five/, licensed under CC BY 4.0, https://creativecommons.org/licenses/by/4.0/. The glyphs were copied as pixel rectangles; the font file is not shipped.

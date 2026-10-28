@@ -57,6 +57,7 @@ class HomeActivity : Activity() {
     private lateinit var bottomFade: Vignette
     private lateinit var bar: LinearLayout
     private lateinit var modal: Modal
+    private lateinit var gate: LibraryGate
     private var bottomInset = 0
     private val onTheme: () -> Unit = { applyTheme() }
 
@@ -123,7 +124,8 @@ class HomeActivity : Activity() {
         frame.setOnApplyWindowInsetsListener { _, ins ->
             val s = ins.safe()
             root.setPadding(s[0], s[1], s[2], 0)
-            val ime = if (Build.VERSION.SDK_INT >= 30) ins.getInsets(WindowInsets.Type.ime()).bottom else 0
+            @Suppress("DEPRECATION")
+            val ime = if (Build.VERSION.SDK_INT >= 30) ins.getInsets(WindowInsets.Type.ime()).bottom else ins.systemWindowInsetBottom
             bottomInset = maxOf(s[3], ime)
             bar.setPadding(s[0] + dpi(8), dpi(8), s[2] + dpi(8), dpi(8) + s[3])
             place()
@@ -131,8 +133,24 @@ class HomeActivity : Activity() {
         }
         setContentView(frame)
         modal = Modal(this, frame, root)
+        gate = LibraryGate(this, frame) {}
+        checkLibraries()
         Theme.listeners += onTheme
         applyTheme()
+    }
+
+    /**
+     * Phones without built-in search and forms: download the engine on first launch
+     * (blocking), and check on every launch whether a newer one is published.
+     */
+    private fun checkLibraries() {
+        if (!Libraries.needed) return
+        if (!Libraries.load(this)) { gate.start(); return }
+        val app = applicationContext
+        Thread {
+            val newer = try { Libraries.latest()?.takeIf { it.version > Libraries.installedVersion(app) } } catch (e: Exception) { null }
+            if (newer != null) runOnUiThread { if (!isDestroyed) gate.start(newer) }
+        }.start()
     }
 
     private fun iconButton(icon: Int, name: String, act: () -> Unit) = ImageView(this).apply {
@@ -178,7 +196,10 @@ class HomeActivity : Activity() {
                 override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
                 override fun afterTextChanged(s: Editable?) = filter()
             })
-            setOnEditorActionListener { _, id, _ -> if (id == EditorInfo.IME_ACTION_SEARCH) { hideKeyboard(); true } else false }
+            setOnEditorActionListener { _, id, ev ->
+                val enter = ev?.keyCode == android.view.KeyEvent.KEYCODE_ENTER && ev.action == android.view.KeyEvent.ACTION_DOWN
+                if (id == EditorInfo.IME_ACTION_SEARCH || enter) { hideKeyboard(); true } else false
+            }
         }
         searchBox.addView(search, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
         clear = iconButton(R.drawable.ic_close, "Clear search") {
@@ -427,6 +448,7 @@ class HomeActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         when {
+            gate.showing -> {}  // the library download cannot be dismissed
             modal.showing -> modal.cancel()
             selecting -> stopSelecting()
             search.text.isNotEmpty() -> search.setText("")

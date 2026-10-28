@@ -339,6 +339,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
         if (searching) { keyboard(false); return }
         // With a menu open, a tap on the page only closes the menu.
         if (menu.showing) { menu.dismiss(); return }
+        if (sheetOpen) { closeBookmarks(); return }
         // Taps never turn pages, so a tap anywhere toggles the chrome.
         if (uiShown) hideUi() else showUi()
     }
@@ -346,6 +347,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
     override fun onVerticalSwipe() {
         if (eng == null || searching) return
         if (menu.showing) { menu.dismiss(); return }
+        if (sheetOpen) { closeBookmarks(); return }
         if (uiShown) hideUi() else showUi()
     }
 
@@ -365,6 +367,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
         if (!uiShown) return
         uiShown = false
         menu.dismiss()
+        closeBookmarks()
         top.animate().translationY(-top.height.toFloat()).setDuration(250).setInterpolator(easeIn).start()
         bottom.animate().translationY(bottom.height.toFloat()).setDuration(250).setInterpolator(easeIn)
             .withEndAction { if (!uiShown) strip?.visibility = View.INVISIBLE }.start()
@@ -396,10 +399,13 @@ class ReaderActivity : Activity(), PdfView.Listener {
     private fun openMenu(from: View, rows: List<Menu.Row>) {
         val same = menu.showing && menuOf === from
         menu.dismiss()
+        closeBookmarks()
         menuOf = null
         if (same) return
         menuOf = from
-        menu.show(rows, Gravity.TOP or Gravity.END, dpi(8), top.height)
+        // Its end edge lines up with the button's end edge.
+        val at = IntArray(2).also { from.getLocationInWindow(it) }
+        menu.show(rows, Gravity.TOP or Gravity.END, root.width - (at[0] + from.width), top.height)
     }
 
     private fun moreMenu() {
@@ -425,17 +431,82 @@ class ReaderActivity : Activity(), PdfView.Listener {
         ))
     }
 
+    // ---- bookmark list ----
+    // It takes the page strip's place: the strip slides down, then the list slides up,
+    // %ease250% both ways. A tap outside it or Back reverses that.
+    private var sheet: LinearLayout? = null
+    private val sheetOpen get() = sheet != null
+
     /** Every bookmark in the file, in page order. A tap jumps there; the minus removes one at once. */
     private fun showBookmarks() {
         val s = state ?: return
         val e = eng ?: return
-        val rows = s.bookmarks.map { p ->
-            Menu.Row("Page ${p + 1} of ${e.pageCount}", remove = { s.bookmarks -= p; save() }) {
-                pdf.jumpTo(p); strip?.centerOn(p)
-            }
+        if (sheetOpen) return
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        fun empty() = label("No bookmarks yet", 15f, Theme.sub()).apply { setPadding(dpi(20), dpi(16), dpi(20), dpi(16)) }
+        for (p in s.bookmarks) list.addView(LinearLayout(this).apply row@{
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = ripple()
+            setPadding(dpi(20), 0, dpi(4), 0)
+            addView(label("Page ${p + 1} of ${e.pageCount}", 15f, Theme.text()), LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+            addView(ImageView(context).apply {
+                setImageResource(R.drawable.ic_remove)
+                setColorFilter(Theme.sub())
+                background = ripple()
+                setPadding(dpi(12), dpi(12), dpi(12), dpi(12))
+                contentDescription = "Remove bookmark on page ${p + 1}"
+                setOnClickListener {
+                    s.bookmarks -= p; save()
+                    // The row fades and closes over 250 ms; the last one leaves the empty note.
+                    val row = this@row; val h = row.height; row.isEnabled = false; isEnabled = false
+                    ValueAnimator.ofFloat(1f, 0f).apply {
+                        duration = Motion.MS; interpolator = Motion.OUT
+                        addUpdateListener { a -> val t = a.animatedValue as Float; row.alpha = t; row.layoutParams.height = (h * t).toInt(); row.requestLayout() }
+                        addListener(object : android.animation.AnimatorListenerAdapter() {
+                            override fun onAnimationEnd(a: android.animation.Animator) {
+                                list.removeView(row)
+                                if (list.childCount == 0) list.addView(empty().apply { alpha = 0f; fade(true) })
+                            }
+                        })
+                        start()
+                    }
+                }
+            }, LinearLayout.LayoutParams(dpi(48), dpi(48)))
+            setOnClickListener { closeBookmarks(); pdf.jumpTo(p); strip?.centerOn(p) }
+        }, LinearLayout.LayoutParams(MATCH_PARENT, dpi(56)))
+        if (s.bookmarks.isEmpty()) list.addView(empty())
+        val cap = (root.height * 0.5f).toInt()
+        val scroll = object : android.widget.ScrollView(this) {
+            override fun onMeasure(w: Int, h: Int) = super.onMeasure(w, MeasureSpec.makeMeasureSpec(cap, MeasureSpec.AT_MOST))
+        }.apply { addView(list) }
+        val sh = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Theme.panel())
+            isClickable = true
+            setPadding(insets[0], dpi(8), insets[2], dpi(8) + insets[3])
+            addView(label("Bookmarks", 13f, Theme.sub(), bold = true).apply { setPadding(dpi(20), dpi(4), dpi(20), dpi(4)) })
+            addView(scroll, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+            visibility = View.INVISIBLE
         }
-        menuOf = bookmarkBtn
-        menu.show(rows, Gravity.TOP or Gravity.END, dpi(8), top.height, maxHeight = (root.height * 0.6f).toInt(), empty = "No bookmarks yet")
+        sheet = sh
+        ui.addView(sh, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.BOTTOM))
+        bottom.animate().translationY(bottom.height.toFloat()).setDuration(Motion.MS).setInterpolator(Motion.OUT).withEndAction {
+            if (sheet !== sh) return@withEndAction
+            sh.translationY = sh.height.toFloat(); sh.visibility = View.VISIBLE
+            sh.animate().translationY(0f).setDuration(Motion.MS).setInterpolator(Motion.IN).start()
+        }.start()
+    }
+
+    private fun closeBookmarks() {
+        val sh = sheet ?: return
+        sheet = null
+        sh.animate().cancel()
+        sh.isEnabled = false
+        sh.animate().translationY(sh.height.toFloat()).setDuration(Motion.MS).setInterpolator(Motion.OUT).withEndAction {
+            ui.removeView(sh)
+            if (uiShown && !searching) bottom.animate().translationY(0f).setDuration(Motion.MS).setInterpolator(Motion.IN).start()
+        }.start()
     }
 
     private fun timeoutMenu() {
@@ -810,6 +881,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
         when {
             gate.showing -> {}  // the library download cannot be dismissed
             menu.showing -> menu.dismiss()
+            sheetOpen -> closeBookmarks()
             modal.showing -> modal.cancel()
             cropper != null -> closeCropper(null)
             // While viewing results, Back steps back one result; from the first, it closes.

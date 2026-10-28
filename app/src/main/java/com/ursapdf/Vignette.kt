@@ -64,8 +64,12 @@ class Vignette(ctx: Context, private val fromBottom: Boolean) : View(ctx) {
         if (bg != washColor || t != washT) {
             washColor = bg; washT = t
             val (y0, y1) = ends()
+            // The sticky block cuts rows across their text, so the top fades longer and deeper;
+            // at the bottom the rows run on under the gesture bar.
+            val dark = if (fromBottom) DARK else TOP_DARK
+            val light = if (fromBottom) LIGHT else TOP_LIGHT
             val colors = IntArray(STOPS.size) { k ->
-                val a = DARK[k] + (LIGHT[k] - DARK[k]) * t
+                val a = dark[k] + (light[k] - dark[k]) * t
                 (bg and 0xFFFFFF) or ((255 * a).toInt() shl 24)
             }
             wash.shader = LinearGradient(0f, y0, 0f, y1, colors, STOPS, Shader.TileMode.CLAMP)
@@ -78,5 +82,7 @@ class Vignette(ctx: Context, private val fromBottom: Boolean) : View(ctx) {
         val STOPS = floatArrayOf(0f, 0.25f, 0.5f, 0.75f, 1f)
         val DARK = floatArrayOf(1f, 0.45f, 0.12f, 0f, 0f)
         val LIGHT = floatArrayOf(1f, 0.62f, 0.32f, 0.1f, 0f)
+        val TOP_DARK = floatArrayOf(1f, 0.8f, 0.45f, 0.15f, 0f)
+        val TOP_LIGHT = floatArrayOf(1f, 0.85f, 0.55f, 0.22f, 0f)
     }
 }

@@ -109,7 +109,7 @@ class HomeActivity : Activity() {
         empty = label("", 15f, Theme.sub()).apply { gravity = Gravity.CENTER_HORIZONTAL; visibility = View.GONE }
         body.addView(empty, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.TOP))
         topFade = Vignette(this, fromBottom = false)
-        body.addView(topFade, FrameLayout.LayoutParams(MATCH_PARENT, dpi(48), Gravity.TOP))
+        body.addView(topFade, FrameLayout.LayoutParams(MATCH_PARENT, dpi(96), Gravity.TOP))
         bottomFade = Vignette(this, fromBottom = true)
         body.addView(bottomFade, FrameLayout.LayoutParams(MATCH_PARENT, dpi(48), Gravity.BOTTOM))
         sticky = buildSticky()

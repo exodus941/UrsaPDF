@@ -423,12 +423,26 @@ class ReaderActivity : Activity(), PdfView.Listener {
         val marked = page in s.bookmarks
         openMenu(bookmarkBtn, listOf(
             Menu.Row(if (marked) "Remove Bookmark" else "Add Bookmark") {
-                if (marked) s.bookmarks -= page else s.bookmarks += page
-                save()
-                toast(if (marked) "Bookmark removed from page ${page + 1}" else "Bookmarked page ${page + 1}")
+                if (marked) {
+                    s.bookmarks -= page; save()
+                    toast("Bookmark removed from page ${page + 1}")
+                } else nameBookmark(page, "Add Bookmark", "Save") { toast("Bookmarked page ${page + 1}") }
             },
             Menu.Row("Show Bookmarks") { showBookmarks() },
         ))
+    }
+
+    private fun bookmarkName(p: Int) = state?.bookmarks?.get(p)?.takeIf { it.isNotBlank() } ?: "Page ${p + 1}"
+
+    /** The name modal, filled with the current name; an emptied name falls back to "Page N". */
+    private fun nameBookmark(p: Int, title: String, action: String, done: () -> Unit) {
+        val s = state ?: return
+        modal.input(title, bookmarkName(p), action) { raw ->
+            val n = raw.trim()
+            s.bookmarks[p] = if (n == "Page ${p + 1}") "" else n
+            save()
+            done()
+        }
     }
 
     // ---- bookmark list ----
@@ -444,12 +458,32 @@ class ReaderActivity : Activity(), PdfView.Listener {
         if (sheetOpen) return
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         fun empty() = label("No bookmarks yet", 15f, Theme.sub()).apply { setPadding(dpi(20), dpi(16), dpi(20), dpi(16)) }
-        for (p in s.bookmarks) list.addView(LinearLayout(this).apply row@{
+        for (p in s.bookmarks.keys) list.addView(LinearLayout(this).apply row@{
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             background = ripple()
-            setPadding(dpi(20), 0, dpi(4), 0)
-            addView(label("Page ${p + 1} of ${e.pageCount}", 15f, Theme.text()), LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+            setPadding(dpi(20), dpi(4), dpi(4), dpi(4))
+            minimumHeight = dpi(56)
+            // The name, and under it the page when the name is not already the page.
+            val name = label("", 15f, Theme.text()).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
+            val where = label("Page ${p + 1} of ${e.pageCount}", 13f, Theme.sub()).apply { setPadding(0, dpi(2), 0, 0) }
+            fun paintName() {
+                name.text = bookmarkName(p)
+                where.visibility = if (s.bookmarks[p].isNullOrBlank()) View.GONE else View.VISIBLE
+            }
+            paintName()
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(name); addView(where)
+            }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+            addView(ImageView(context).apply {
+                setImageResource(R.drawable.ic_rename)
+                setColorFilter(Theme.sub())
+                background = ripple()
+                setPadding(dpi(12), dpi(12), dpi(12), dpi(12))
+                contentDescription = "Rename bookmark on page ${p + 1}"
+                setOnClickListener { nameBookmark(p, "Rename Bookmark", "Save") { paintName() } }
+            }, LinearLayout.LayoutParams(dpi(48), dpi(48)))
             addView(ImageView(context).apply {
                 setImageResource(R.drawable.ic_remove)
                 setColorFilter(Theme.sub())
@@ -474,7 +508,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
                 }
             }, LinearLayout.LayoutParams(dpi(48), dpi(48)))
             setOnClickListener { closeBookmarks(); pdf.jumpTo(p); strip?.centerOn(p) }
-        }, LinearLayout.LayoutParams(MATCH_PARENT, dpi(56)))
+        }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { height = WRAP_CONTENT })
         if (s.bookmarks.isEmpty()) list.addView(empty())
         val cap = (root.height * 0.5f).toInt()
         val scroll = object : android.widget.ScrollView(this) {

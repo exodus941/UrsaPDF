@@ -16,7 +16,7 @@ class DocState(val uri: String, var name: String) {
     var size = 0L     // bytes; 0 until known
     val crop = RectF(0f, 0f, 1f, 1f)
     var opened = 0L
-    val bookmarks = sortedSetOf<Int>()  // page indexes
+    val bookmarks = sortedMapOf<Int, String>()  // page index to name; "" means unnamed
 }
 
 object Store {
@@ -42,7 +42,8 @@ object Store {
                     j.optDouble("r", 1.0).toFloat(), j.optDouble("b", 1.0).toFloat()
                 )
                 opened = j.optLong("ts")
-                j.optJSONArray("bm")?.let { a -> for (k in 0 until a.length()) bookmarks += a.getInt(k) }
+                // 1.5.11 stored bare page numbers; later versions store {p, n}.
+                j.optJSONArray("bm")?.let { a -> for (k in 0 until a.length()) a.optJSONObject(k)?.let { o -> bookmarks[o.getInt("p")] = o.optString("n") } ?: run { bookmarks[a.getInt(k)] = "" } }
             }
         }
         out.sortByDescending { it.opened }
@@ -80,7 +81,7 @@ object Store {
         val o = list[i]
         list[i] = DocState(newUri, newName).also { d ->
             d.page = o.page; d.offset = o.offset; d.x = o.x; d.zoom = o.zoom; d.invert = o.invert
-            d.pages = o.pages; d.size = o.size; d.crop.set(o.crop); d.opened = o.opened; d.bookmarks += o.bookmarks
+            d.pages = o.pages; d.size = o.size; d.crop.set(o.crop); d.opened = o.opened; d.bookmarks.putAll(o.bookmarks)
         }
         write(c, list)
     }
@@ -101,7 +102,7 @@ object Store {
             put("l", d.crop.left.toDouble()); put("t", d.crop.top.toDouble())
             put("r", d.crop.right.toDouble()); put("b", d.crop.bottom.toDouble())
             put("ts", d.opened)
-            if (d.bookmarks.isNotEmpty()) put("bm", JSONArray(d.bookmarks.toList()))
+            if (d.bookmarks.isNotEmpty()) put("bm", JSONArray().apply { for ((p, n) in d.bookmarks) put(JSONObject().put("p", p).put("n", n)) })
         })
         prefs(c).edit().putString("docs", arr.toString()).apply()
     }

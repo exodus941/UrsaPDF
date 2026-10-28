@@ -409,7 +409,7 @@ class PdfView(ctx: Context) : View(ctx) {
     }).apply { setIsLongpressEnabled(false) }
 
     /**
-     * A flick within 11.25° of a multiple of 45° travels along that line instead, at the
+     * A flick within 15° of a multiple of 45° travels along that line instead, at the
      * same speed; any other flick keeps its own direction.
      */
     private fun snapFlick(vx: Float, vy: Float): Pair<Float, Float> {
@@ -417,7 +417,7 @@ class PdfView(ctx: Context) : View(ctx) {
         if (speed == 0f) return vx to vy
         val deg = Math.toDegrees(kotlin.math.atan2(vy.toDouble(), vx.toDouble()))
         val near = Math.round(deg / 45.0) * 45.0
-        if (abs(deg - near) > 11.25) return vx to vy
+        if (abs(deg - near) > 15.0) return vx to vy
         val r = Math.toRadians(near)
         return (speed * kotlin.math.cos(r)).toFloat() to (speed * kotlin.math.sin(r)).toFloat()
     }

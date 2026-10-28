@@ -109,9 +109,9 @@ class HomeActivity : Activity() {
         empty = label("", 15f, Theme.sub()).apply { gravity = Gravity.CENTER_HORIZONTAL; visibility = View.GONE }
         body.addView(empty, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.TOP))
         topFade = Vignette(this, fromBottom = false)
-        body.addView(topFade, FrameLayout.LayoutParams(MATCH_PARENT, dpi(32), Gravity.TOP))
+        body.addView(topFade, FrameLayout.LayoutParams(MATCH_PARENT, dpi(48), Gravity.TOP))
         bottomFade = Vignette(this, fromBottom = true)
-        body.addView(bottomFade, FrameLayout.LayoutParams(MATCH_PARENT, dpi(32), Gravity.BOTTOM))
+        body.addView(bottomFade, FrameLayout.LayoutParams(MATCH_PARENT, dpi(48), Gravity.BOTTOM))
         sticky = buildSticky()
         body.addView(sticky, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.TOP))
         sticky.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> place() }
@@ -230,7 +230,7 @@ class HomeActivity : Activity() {
         // The list runs under the gesture bar, so the shadow runs to the screen's edge too;
         // stopping above the bar left its darkest row against white. Over the selection
         // bar it sits on the bar's top edge instead.
-        val fadeH = dpi(32) + if (selecting) 0 else bottomInset
+        val fadeH = dpi(48) + if (selecting) 0 else bottomInset
         if (bottomFade.layoutParams.height != fadeH) { bottomFade.layoutParams.height = fadeH; bottomFade.requestLayout() }
         bottomFade.translationY = -(if (selecting) bar.height else 0).toFloat()
         updateFades()

@@ -27,6 +27,7 @@ class Vignette(ctx: Context, private val fromBottom: Boolean) : View(ctx) {
     }
     private val wash = Paint()
     private var washColor = 0
+    private var washT = -1f
     private var on = false
 
     init { alpha = 0f }
@@ -56,16 +57,26 @@ class Vignette(ctx: Context, private val fromBottom: Boolean) : View(ctx) {
             shade.alpha = (255 * (1 - t)).toInt()
             c.drawRect(0f, 0f, w, h, shade)
         }
-        if (t > 0f) {
-            val bg = Theme.bg()
-            if (bg != washColor) {
-                washColor = bg
-                val (y0, y1) = ends()
-                // 85% of the background at the edge, so rows read as passing under a mist.
-                wash.shader = LinearGradient(0f, y0, 0f, y1, (bg and 0xFFFFFF) or 0xD9000000.toInt(), bg and 0xFFFFFF, Shader.TileMode.CLAMP)
+        // Over the shade, the background colour at full strength at the edge, so rows
+        // dissolve into the sticky block or the screen edge instead of being cut there.
+        // Dark mode keeps it to the outer half, leaving the shade to do the rest.
+        val bg = Theme.bg()
+        if (bg != washColor || t != washT) {
+            washColor = bg; washT = t
+            val (y0, y1) = ends()
+            val colors = IntArray(STOPS.size) { k ->
+                val a = DARK[k] + (LIGHT[k] - DARK[k]) * t
+                (bg and 0xFFFFFF) or ((255 * a).toInt() shl 24)
             }
-            wash.alpha = (255 * t).toInt()
-            c.drawRect(0f, 0f, w, h, wash)
+            wash.shader = LinearGradient(0f, y0, 0f, y1, colors, STOPS, Shader.TileMode.CLAMP)
         }
+        c.drawRect(0f, 0f, w, h, wash)
+    }
+
+    private companion object {
+        // Background opacity from the edge (0) to the inner end (1).
+        val STOPS = floatArrayOf(0f, 0.25f, 0.5f, 0.75f, 1f)
+        val DARK = floatArrayOf(1f, 0.45f, 0.12f, 0f, 0f)
+        val LIGHT = floatArrayOf(1f, 0.62f, 0.32f, 0.1f, 0f)
     }
 }

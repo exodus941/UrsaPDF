@@ -426,6 +426,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
     private fun toggleLock() {
         pdf.lockZoom = if (pdf.lockZoom > 0f) 0f else pdf.zoom
         save()
+        toast(if (pdf.lockZoom > 0f) "Zoom locked" else "Zoom unlocked")
     }
 
     private fun bookmarkMenu() {

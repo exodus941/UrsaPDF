@@ -34,8 +34,12 @@ class PieMenu(
 
     companion object {
         const val TILT = 20f
-        /** Degrees of turn per ratchet tick: four to a 60 degree segment. */
-        const val NOTCH = 15.0
+        /** Ratchet: finger travel around the centre per tick, in dp; about four to a segment at mid ring. */
+        const val NOTCH_DP = 20f
+        /** Ratchet: the finger's speed is smoothed over this long (seconds), so uneven touch reports even out. */
+        const val SMOOTH = 0.06
+        /** Ratchet: at most this many ticks a second; faster turns hold this rate, evenly. */
+        const val MAX_RATE = 25.0
         /**
          * Without the ratchet: how long the finger must stay in a segment, or the centre,
          * before it ticks. 62.5 ms; Android's timers count whole milliseconds.
@@ -60,13 +64,40 @@ class PieMenu(
     private val inner = RectF()
     private val onTheme: () -> Unit = { invalidate() }
     private val step get() = 360f / items.size
-    // With [rotary], a rotary dial's ratchet: turning the finger around the centre ticks
-    // every NOTCH degrees, so a faster turn ticks faster; moving in or out, or in the
-    // centre, is silent. Without it, one tick for each segment, or the centre, the finger
-    // stays in for DWELL; one only passed through stays silent.
+    // With [rotary], a rotary dial's ratchet. The finger's travel around the centre (not
+    // in or out, not in the centre) is smoothed into one speed, and that speed drives an
+    // even ticker: a tick every NOTCH_DP of travel, each timed to the millisecond it falls
+    // due rather than to whichever touch report crossed a notch, which bunched them.
+    // Without it, one tick for each segment, or the centre, the finger stays in for DWELL;
+    // one only passed through stays silent.
     private val ratchet = Ratchet()
     private var lastDeg = Double.NaN  // finger angle at the last move on the ring; NaN in the centre
-    private var turned = 0.0          // degrees turned since entering the ring
+    private val notchPx = a.dp(NOTCH_DP)
+    private var pendingPx = 0f        // travel around the centre since the last frame
+    private var speed = 0.0           // smoothed, px per second
+    private var phase = 0.0           // fraction of the way to the next tick
+    private var lastFrame = 0L
+    private var due = false           // a tick is posted for later in this frame
+    private val dueTick = Runnable { due = false; phase -= 1; if (!closing) ratchet.tick(gap = 0) }
+    private val frame = object : android.view.Choreographer.FrameCallback {
+        override fun doFrame(t: Long) {
+            if (closing) return
+            android.view.Choreographer.getInstance().postFrameCallback(this)
+            if (lastFrame == 0L) { lastFrame = t; return }
+            val dt = ((t - lastFrame) / 1e9).coerceIn(0.001, 0.1)
+            lastFrame = t
+            speed += (pendingPx / dt - speed) * (1 - kotlin.math.exp(-dt / SMOOTH))
+            pendingPx = 0f
+            val rate = min(speed / notchPx, MAX_RATE)
+            if (rate < 0.5) return            // still, or as good as: the ratchet rests
+            phase += rate * dt
+            if (due) return
+            if (phase >= 1) { phase -= 1; ratchet.tick(gap = 0); return }
+            // The next notch falls before the next frame: post it for its own moment.
+            val wait = (1 - phase) / rate
+            if (wait < dt * 1.5) { due = true; postDelayed(dueTick, (wait * 1000).toLong()) }
+        }
+    }
     private var region = -1           // under the finger: -1 the centre, else a segment, dimmed ones too
     private var ticked = -1           // the region the last tick was for
     private val settle = Runnable { if (!closing && region != ticked) { ticked = region; ratchet.tick() } }
@@ -95,12 +126,15 @@ class PieMenu(
         super.onAttachedToWindow()
         Theme.listeners += onTheme
         growAnim.start()
+        if (rotary) android.view.Choreographer.getInstance().postFrameCallback(frame)
     }
 
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
         growAnim.cancel()
         removeCallbacks(settle)
+        removeCallbacks(dueTick)
+        android.view.Choreographer.getInstance().removeFrameCallback(frame)
         ratchet.release()
         Theme.listeners -= onTheme
     }
@@ -126,10 +160,9 @@ class PieMenu(
                 if (!rotary) {
                     if (r != region) { region = r; removeCallbacks(settle); postDelayed(settle, DWELL) }
                 } else if (r < 0) lastDeg = Double.NaN else {
-                    if (lastDeg.isNaN()) turned = 0.0 else {
-                        val before = kotlin.math.floor(turned / NOTCH)
-                        turned += ((angle - lastDeg + 540) % 360) - 180  // the short way round
-                        if (kotlin.math.floor(turned / NOTCH) != before) ratchet.tick()
+                    if (!lastDeg.isNaN()) {
+                        val turn = ((angle - lastDeg + 540) % 360) - 180  // degrees, the short way round
+                        pendingPx += (kotlin.math.abs(turn) * Math.PI / 180 * d).toFloat()
                     }
                     lastDeg = angle
                 }

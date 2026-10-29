@@ -65,10 +65,11 @@ class Ratchet {
         }
     }
 
-    fun tick() {
+    /** [gap]: the least time since the last tick, in ms; a tick sooner is dropped. */
+    fun tick(gap: Long = 35) {
         val t = track ?: return
         val now = SystemClock.uptimeMillis()
-        if (now - last < 35) return
+        if (now - last < gap) return
         last = now
         try { t.stop(); t.reloadStaticData(); t.play() } catch (_: Exception) {}
     }

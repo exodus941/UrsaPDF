@@ -32,7 +32,11 @@ class PieMenu(
     /** [enabled] false draws the segment dimmed and it cannot be picked. */
     class Item(val icon: Int, val name: String, val enabled: Boolean = true, val act: () -> Unit)
 
-    companion object { const val TILT = 20f }
+    companion object {
+        const val TILT = 20f
+        /** How long the finger must stay in a segment, or the centre, before it ticks. */
+        const val DWELL = 80L
+    }
 
     private val outerR = a.dp(120f)
     private val innerR = a.dp(40f)
@@ -54,6 +58,8 @@ class PieMenu(
     // One ratchet tick each time the finger enters another segment, or the centre.
     private val ratchet = Ratchet()
     private var region = -1           // under the finger: -1 the centre, else a segment, dimmed ones too
+    private var ticked = -1           // the region the last tick was for
+    private val settle = Runnable { if (!closing && region != ticked) { ticked = region; ratchet.tick() } }
     // Each segment's yellow, 0..1; it moves toward its target over 62.5 ms, linear.
     private val lit = FloatArray(items.size)
     private var litAt = 0L            // last fade step; 0 while every segment is settled
@@ -84,6 +90,7 @@ class PieMenu(
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
         growAnim.cancel()
+        removeCallbacks(settle)
         ratchet.release()
         Theme.listeners -= onTheme
     }
@@ -108,7 +115,13 @@ class PieMenu(
                     val deg = (Math.toDegrees(atan2(dx.toDouble(), -dy.toDouble())) + 360 + step / 2) % 360
                     (deg / step).toInt().coerceAtMost(items.size - 1)
                 }
-                if (r != region) { region = r; ratchet.tick() }
+                if (r != region) {
+                    // The tick waits until the finger stays: a segment only passed through
+                    // on the way to another stays silent.
+                    region = r
+                    removeCallbacks(settle)
+                    postDelayed(settle, DWELL)
+                }
                 val k = r.takeIf { it >= 0 && items[it].enabled } ?: -1
                 if (k != sel) {
                     sel = k

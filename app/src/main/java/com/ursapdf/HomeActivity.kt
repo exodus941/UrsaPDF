@@ -552,17 +552,17 @@ class HomeActivity : Activity() {
             val texts = row.getChildAt(1) as LinearLayout
             (texts.getChildAt(0) as TextView).text = d.name
             val now = System.currentTimeMillis()
-            val ago = if (now - d.opened < DateUtils.MINUTE_IN_MILLIS) "just now"
+            val ago = if (now - d.opened < DateUtils.MINUTE_IN_MILLIS) "Just now"
                 else DateUtils.getRelativeTimeSpanString(d.opened, now, DateUtils.MINUTE_IN_MILLIS)
             val parts = ArrayList<CharSequence>()
             if (d.pages > 0) parts += "Page ${d.page + 1} of ${d.pages}"
-            parts += ago
+            parts += ago.toString().replaceFirstChar { it.uppercase() }  // sentence case: "Just now", "Yesterday"
             if (d.size > 0) parts += android.text.format.Formatter.formatShortFileSize(this@HomeActivity, d.size)
             val line = parts.joinToString("  ·  ")
             val n = d.bookmarks.size
             // The bookmark count only when the whole line still fits on one row.
             (texts.getChildAt(1) as FitLine).options = if (n == 0) listOf(line)
-                else listOf("$line  ·  $n bookmark${if (n == 1) "" else "s"}", line)
+                else listOf("$line  ·  $n Bookmark${if (n == 1) "" else "s"}", line)
             (row.getChildAt(2) as ImageView).setOnClickListener { v -> rowMenu(v, d) }
             paintRow(row)
             return row

@@ -38,8 +38,8 @@ class PieMenu(
         const val NOTCH_DP = 20f
         /** Ratchet: the finger's speed is smoothed over this long (seconds), so uneven touch reports even out. */
         const val SMOOTH = 0.06
-        /** Ratchet: at most this many ticks a second, one per 50 ms; faster turns hold this rate, evenly. Set by the user; do not change unasked. */
-        const val MAX_RATE = 20.0
+        /** Ratchet: at most this many ticks a second, one per 71 ms (56.25% of the first 25); faster turns hold this rate, evenly. Set by the user; do not change unasked. */
+        const val MAX_RATE = 14.0625
         /**
          * Without the ratchet: how long the finger must stay in a segment, or the centre,
          * before it ticks. 62.5 ms; Android's timers count whole milliseconds.

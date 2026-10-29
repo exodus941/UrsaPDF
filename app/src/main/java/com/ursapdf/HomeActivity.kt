@@ -558,7 +558,11 @@ class HomeActivity : Activity() {
             if (d.pages > 0) parts += "Page ${d.page + 1} of ${d.pages}"
             parts += ago
             if (d.size > 0) parts += android.text.format.Formatter.formatShortFileSize(this@HomeActivity, d.size)
-            (texts.getChildAt(1) as TextView).text = parts.joinToString("  ·  ")
+            val line = parts.joinToString("  ·  ")
+            val n = d.bookmarks.size
+            // The bookmark count only when the whole line still fits on one row.
+            (texts.getChildAt(1) as FitLine).options = if (n == 0) listOf(line)
+                else listOf("$line  ·  $n bookmark${if (n == 1) "" else "s"}", line)
             (row.getChildAt(2) as ImageView).setOnClickListener { v -> rowMenu(v, d) }
             paintRow(row)
             return row
@@ -575,7 +579,9 @@ class HomeActivity : Activity() {
                 orientation = LinearLayout.VERTICAL
                 setPadding(0, dpi(8), 0, dpi(8))
                 addView(label("", 16f, Theme.text()).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.MIDDLE })
-                addView(label("", 13f, Theme.sub()).apply { setPadding(0, dpi(2), 0, 0) })
+                addView(FitLine(context).apply {
+                    textSize = 13f; setTextColor(Theme.sub()); setPadding(0, dpi(2), 0, 0)
+                })
             }
             addView(texts, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
             addView(ImageView(context).apply {
@@ -586,5 +592,20 @@ class HomeActivity : Activity() {
                 isFocusable = false
             }, LinearLayout.LayoutParams(dpi(48), dpi(48)))
         }
+    }
+}
+
+/** Shows the first of [options] that fits its width on one line; the last one wraps if none does. */
+private class FitLine(c: android.content.Context) : TextView(c) {
+    var options: List<String> = emptyList()
+        set(v) { field = v; text = v.firstOrNull() ?: ""; requestLayout() }
+
+    override fun onMeasure(w: Int, h: Int) {
+        val room = MeasureSpec.getSize(w) - paddingLeft - paddingRight
+        if (MeasureSpec.getMode(w) != MeasureSpec.UNSPECIFIED && options.isNotEmpty()) {
+            val pick = options.firstOrNull { paint.measureText(it) <= room } ?: options.last()
+            if (text.toString() != pick) text = pick
+        }
+        super.onMeasure(w, h)
     }
 }

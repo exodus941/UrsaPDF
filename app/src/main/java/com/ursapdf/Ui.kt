@@ -61,11 +61,27 @@ fun android.app.Activity.note(text: String) {
     val host = findViewById<android.view.ViewGroup>(android.R.id.content) ?: return
     host.findViewWithTag<View>("note")?.let { host.removeView(it) }
     val bar = window.decorView.rootWindowInsets?.safe()?.get(3) ?: 0
-    val v = label(text, 14f, Theme.text(), bold = true).apply {
+    // A wrapped TextView keeps the full width it was offered; this one shrinks to its longest line.
+    val v = object : TextView(this) {
+        override fun onMeasure(w: Int, h: Int) {
+            super.onMeasure(w, h)
+            val l = layout ?: return
+            if (l.lineCount < 2) return
+            val widest = (0 until l.lineCount).maxOf { l.getLineWidth(it) }
+            val want = kotlin.math.ceil(widest).toInt() + totalPaddingLeft + totalPaddingRight
+            super.onMeasure(MeasureSpec.makeMeasureSpec(want, MeasureSpec.EXACTLY), h)
+        }
+    }.apply {
+        this.text = text
+        textSize = 14f
+        setTextColor(Theme.text())
+        setTypeface(typeface, android.graphics.Typeface.BOLD)
         tag = "note"
         background = pill(Theme.popup(), 14f).apply { setStroke(dpi(1), Theme.outline()) }
         setPadding(dpi(16), dpi(10), dpi(16), dpi(10))
         gravity = android.view.Gravity.CENTER
+        // Text only. Too long for one line, it splits into lines of about equal length.
+        breakStrategy = android.text.Layout.BREAK_STRATEGY_BALANCED
         elevation = dp(8f)
         alpha = 0f
     }

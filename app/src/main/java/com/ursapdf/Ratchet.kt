@@ -1,6 +1,5 @@
 package com.ursapdf
 
-import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
@@ -14,15 +13,11 @@ import kotlin.math.sin
  * The ratchet tick from tools/ratchet-tick.js, made the same way: half a closed hi-hat
  * (six square waves at 600 Hz times 2, 3, 4.16, 5.43, 6.79 and 8.21) and half white
  * noise, decaying in 4 and 5 ms, through a high-pass at 8.5 kHz and a band-pass at
- * 11.5 kHz (Q 0.5), at a gain of 0.25. One tick per [notch] dp of finger travel, never
- * closer than 35 ms apart, so a faster finger ticks more often.
+ * 11.5 kHz (Q 0.5), at a gain of 0.25. [tick] plays one, never closer than 35 ms apart.
  */
-class Ratchet(c: Context, notchDp: Float = 4f) {
-    private val notch = c.dp(notchDp)
+class Ratchet {
     private val rate = 48000
     private val track: AudioTrack?
-    private var travelled = 0f
-    private var at = 0
     private var last = 0L
 
     init {
@@ -76,13 +71,6 @@ class Ratchet(c: Context, notchDp: Float = 4f) {
         if (now - last < 35) return
         last = now
         try { t.stop(); t.reloadStaticData(); t.play() } catch (_: Exception) {}
-    }
-
-    /** Finger moved [d] px; ticks each time a notch is crossed. */
-    fun move(d: Float) {
-        travelled += d
-        val n = (travelled / notch).toInt()
-        if (n != at) { at = n; tick() }
     }
 
     fun release() = track?.release()

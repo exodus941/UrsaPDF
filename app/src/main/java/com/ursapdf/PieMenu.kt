@@ -51,10 +51,9 @@ class PieMenu(
     private val inner = RectF()
     private val onTheme: () -> Unit = { invalidate() }
     private val step get() = 360f / items.size
-    // Finger travel ticks the ratchet; a faster finger crosses more notches a second.
-    private val ratchet = Ratchet(a)
-    private var lastX = x
-    private var lastY = y
+    // One ratchet tick each time the finger enters another segment, or the centre.
+    private val ratchet = Ratchet()
+    private var region = -1           // under the finger: -1 the centre, else a segment, dimmed ones too
     // Each segment's yellow, 0..1; it moves toward its target over 62.5 ms, linear.
     private val lit = FloatArray(items.size)
     private var litAt = 0L            // last fade step; 0 while every segment is settled
@@ -104,13 +103,13 @@ class PieMenu(
         val d = hypot(dx, dy)
         when (e.actionMasked) {
             MotionEvent.ACTION_MOVE -> {
-                ratchet.move(hypot(e.x - lastX, e.y - lastY))
-                lastX = e.x; lastY = e.y
-                val k = if (d < innerR) -1 else {
+                val r = if (d < innerR) -1 else {
                     // 0 degrees at the top, rising clockwise; each segment centres on its angle.
                     val deg = (Math.toDegrees(atan2(dx.toDouble(), -dy.toDouble())) + 360 + step / 2) % 360
-                    (deg / step).toInt().takeIf { items[it].enabled } ?: -1
+                    (deg / step).toInt().coerceAtMost(items.size - 1)
                 }
+                if (r != region) { region = r; ratchet.tick() }
+                val k = r.takeIf { it >= 0 && items[it].enabled } ?: -1
                 if (k != sel) {
                     sel = k
                     if (litAt == 0L) litAt = android.os.SystemClock.uptimeMillis()  // the fade starts now

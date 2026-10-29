@@ -26,7 +26,7 @@ import kotlin.math.sin
  */
 class PieMenu(
     private val a: Activity, private val items: List<Item>, x: Float, y: Float,
-    private val rotary: Boolean, private val leftHanded: Boolean, private val done: (PieMenu) -> Unit,
+    private val leftHanded: Boolean, private val done: (PieMenu) -> Unit,
 ) : View(a) {
 
     /** [enabled] false draws the segment dimmed and it cannot be picked. */
@@ -34,26 +34,16 @@ class PieMenu(
 
     companion object {
         const val TILT = 20f
-        /** Ratchet: finger travel around the centre per tick, in dp; about four to a segment at mid ring. */
-        const val NOTCH_DP = 20f
-        /** Ratchet: the finger's speed is smoothed over this long (seconds), so uneven touch reports even out. */
+        /** The finger's turning speed is smoothed over this long (seconds), so uneven touch reports even out. */
         const val SMOOTH = 0.06
-        /** Ratchet: at most this many ticks a second at the resting pitch, one per 71 ms (56.25% of the first 25). Set by the user; do not change unasked. */
-        const val MAX_RATE = 14.0625
-        /** Ratchet: the cap at full pitch; it rises from MAX_RATE with the pitch. */
-        const val FAST_RATE = 18.0
-        /** Ratchet: this long with no travel, in ms, and the finger counts as stopped. */
-        const val STILL = 40L
-        /** Ratchet: the wanted rate at which the pitch is full, 2 turns a second at mid ring (25 notches a turn). */
-        const val FULL_RATE = 50.0
         /**
-         * Without the ratchet: how long the finger must stay in a segment, or the centre,
-         * before it ticks. 62.5 ms; Android's timers count whole milliseconds.
+         * How long the finger must stay in a segment, or the centre, before it ticks.
+         * 62.5 ms; Android's timers count whole milliseconds.
          */
         const val DWELL = 63L
-        /** Without the ratchet: the dwell at full pitch, so faster turns still tick per segment. */
+        /** The dwell at full pitch, so faster turns still tick per segment. */
         const val FAST_DWELL = 42L
-        /** Without the ratchet: turns a second where the pitch starts rising, and where it is full. */
+        /** Turns a second where the pitch starts rising, and where it is full. */
         const val SLOW_TURNS = 0.5625
         const val FULL_TURNS = 2.0
         /** The top pitch: half an octave. */
@@ -86,59 +76,13 @@ class PieMenu(
     private val inner = RectF()
     private val onTheme: () -> Unit = { invalidate() }
     private val step get() = 360f / items.size
-    // With [rotary], a rotary dial's ratchet. The finger's travel around the centre (not
-    // in or out, not in the centre) is smoothed into one speed, and that speed drives an
-    // even ticker: a tick every NOTCH_DP of travel, each timed to the millisecond it falls
-    // due rather than to whichever touch report crossed a notch, which bunched them.
-    // Without it, one tick for each segment, or the centre, the finger stays in for DWELL;
-    // one only passed through stays silent.
-    private val ratchet = Ratchet()
-    private var lastDeg = Double.NaN  // finger angle at the last move on the ring; NaN in the centre
-    private val notchPx = a.dp(NOTCH_DP)
-    private var pendingPx = 0f        // travel around the centre since the last frame
-    private var speed = 0.0           // smoothed, px per second
-    private var phase = 0.0           // fraction of the way to the next tick
-    private var lastFrame = 0L
-    private var due = false           // a tick is posted for later in this frame
-    private var tone = 1.0            // pitch for the next tick: past the cap it rises with speed
-    // Notches the finger has really crossed and not yet ticked for, at most one. Smoothing
-    // alone kept the speed up for about 0.2 s after the finger stopped, and the ticks ran on.
-    private var owed = 0.0
-    private var movedAt = 0L          // frame time of the last travel, ns
-    private fun spend(): Boolean { if (owed < 1) return false; owed -= 1; return true }
-    private val dueTick = Runnable { due = false; phase -= 1; if (!closing && spend()) ratchet.tick(gap = 0, pitch = tone) }
-    private val frame = object : android.view.Choreographer.FrameCallback {
-        override fun doFrame(t: Long) {
-            if (closing) return
-            android.view.Choreographer.getInstance().postFrameCallback(this)
-            if (lastFrame == 0L) { lastFrame = t; return }
-            val dt = ((t - lastFrame) / 1e9).coerceIn(0.001, 0.1)
-            lastFrame = t
-            speed += (pendingPx / dt - speed) * (1 - kotlin.math.exp(-dt / SMOOTH))
-            if (pendingPx > 0f) movedAt = t
-            owed = minOf(1.0, owed + pendingPx / notchPx)
-            pendingPx = 0f
-            // No travel for STILL: the finger has stopped, so the ratchet stops with it.
-            if (t - movedAt > STILL * 1_000_000) { speed = 0.0; phase = 0.0 }
-            // Past MAX_RATE the rate holds, so the pitch carries the speed instead, up to half
-            // an octave at FULL_RATE; the cap rises with it to FAST_RATE.
-            val want = speed / notchPx
-            val f = ramp(want, MAX_RATE, FULL_RATE)
-            tone = pitch(f)
-            val rate = min(want, MAX_RATE + (FAST_RATE - MAX_RATE) * f)
-            if (rate < 0.5) return            // still, or as good as: the ratchet rests
-            phase += rate * dt
-            if (due) return
-            if (phase >= 1) { phase -= 1; if (spend()) ratchet.tick(gap = 0, pitch = tone); return }
-            // The next notch falls before the next frame: post it for its own moment.
-            val wait = (1 - phase) / rate
-            if (wait < dt * 1.5) { due = true; postDelayed(dueTick, (wait * 1000).toLong()) }
-        }
-    }
+    // One tick for each segment, or the centre, the finger stays in for the dwell; one only
+    // passed through stays silent.
+    private val ratchet = Ratchet.shared
     private var region = -1           // under the finger: -1 the centre, else a segment, dimmed ones too
     private var ticked = -1           // the region the last tick was for
-    // Without the ratchet, speed still counts: the finger's turns a second, smoothed over
-    // SMOOTH, raise the pitch and shorten the dwell, both from SLOW_TURNS to FULL_TURNS.
+    // Speed counts: the finger's turns a second, smoothed over SMOOTH, raise the pitch and
+    // shorten the dwell, both from SLOW_TURNS to FULL_TURNS.
     private var turns = 0.0
     private var turnDeg = Double.NaN  // angle at the last move on the ring
     private var turnAt = 0L           // event time of that move
@@ -213,7 +157,6 @@ class PieMenu(
         super.onAttachedToWindow()
         Theme.listeners += onTheme
         growAnim.start()
-        if (rotary) android.view.Choreographer.getInstance().postFrameCallback(frame)
         (parent as? android.view.ViewGroup)?.addView(name, android.view.ViewGroup.LayoutParams(
             android.view.ViewGroup.LayoutParams.WRAP_CONTENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT))
     }
@@ -223,9 +166,6 @@ class PieMenu(
         (name.parent as? android.view.ViewGroup)?.removeView(name)
         growAnim.cancel()
         removeCallbacks(settle)
-        removeCallbacks(dueTick)
-        android.view.Choreographer.getInstance().removeFrameCallback(frame)
-        ratchet.release()
         Theme.listeners -= onTheme
     }
 
@@ -261,23 +201,10 @@ class PieMenu(
                     if (litAt == 0L) litAt = android.os.SystemClock.uptimeMillis()
                     invalidate()
                 }
-                if (!rotary) {
-                    if (r != region) {
-                        region = r; removeCallbacks(settle)
-                        val f = ramp(turnsNow(), SLOW_TURNS, FULL_TURNS)
-                        postDelayed(settle, DWELL - ((DWELL - FAST_DWELL) * f).toLong())
-                    }
-                } else if (r < 0) {
-                    // Back into the centre: one tick, then silence while it stays there.
-                    if (!lastDeg.isNaN()) ratchet.tick()
-                    lastDeg = Double.NaN
-                } else {
-                    // Out of the centre onto the ring: one tick at once, and the ratchet starts fresh.
-                    if (lastDeg.isNaN()) { ratchet.tick(); phase = 0.0; owed = 0.0 } else {
-                        val turn = ((angle - lastDeg + 540) % 360) - 180  // degrees, the short way round
-                        pendingPx += (kotlin.math.abs(turn) * Math.PI / 180 * d).toFloat()
-                    }
-                    lastDeg = angle
+                if (r != region) {
+                    region = r; removeCallbacks(settle)
+                    val f = ramp(turnsNow(), SLOW_TURNS, FULL_TURNS)
+                    postDelayed(settle, DWELL - ((DWELL - FAST_DWELL) * f).toLong())
                 }
                 val k = r.takeIf { it >= 0 && items[it].enabled } ?: -1
                 if (k != sel) {

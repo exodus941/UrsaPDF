@@ -160,7 +160,8 @@ class PieMenu(
                 if (!rotary) {
                     if (r != region) { region = r; removeCallbacks(settle); postDelayed(settle, DWELL) }
                 } else if (r < 0) lastDeg = Double.NaN else {
-                    if (!lastDeg.isNaN()) {
+                    // Out of the centre onto the ring: one tick at once, and the ratchet starts fresh.
+                    if (lastDeg.isNaN()) { ratchet.tick(); phase = 0.0 } else {
                         val turn = ((angle - lastDeg + 540) % 360) - 180  // degrees, the short way round
                         pendingPx += (kotlin.math.abs(turn) * Math.PI / 180 * d).toFloat()
                     }

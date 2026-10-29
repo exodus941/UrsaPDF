@@ -445,9 +445,10 @@ class ReaderActivity : Activity(), PdfView.Listener {
     // ---- pie menu ----
     private var pie: PieMenu? = null
 
-    /** A page held still for 500 ms. The chrome slides away while the pie fades in. */
+    /** A page held still for 250 ms. The chrome and any search slide away as the pie opens. */
     override fun onLongPress(x: Float, y: Float) {
-        if (eng == null || searching || pie != null) return
+        if (eng == null || pie != null) return
+        closeSearch()  // search slides away; only the pie shows
         menu.dismiss()
         closeBookmarks()
         hideUi()
@@ -947,7 +948,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
         }
     }
 
-    private fun toast(t: String) = Toast.makeText(this, t, Toast.LENGTH_SHORT).show()
+    private fun toast(t: String) = note(t)
 
     private fun showFlash(text: String) {
         flash.text = text

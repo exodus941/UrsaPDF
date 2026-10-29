@@ -62,7 +62,7 @@ object Updater {
         if (seen != BuildConfig.VERSION_NAME) {
             p.edit().putString("version", BuildConfig.VERSION_NAME).apply()
             if (seen != null && newer(BuildConfig.VERSION_NAME, seen))
-                Toast.makeText(a, "UrsaPDF updated to ${BuildConfig.VERSION_NAME}", Toast.LENGTH_LONG).show()
+                a.note("UrsaPDF updated to ${BuildConfig.VERSION_NAME}")
         }
     }
 
@@ -132,13 +132,13 @@ object Updater {
             val result = try { Result.success(latest()) } catch (e: Exception) { Result.failure(e) }
             a.runOnUiThread {
                 if (a.isFinishing) return@runOnUiThread
-                result.onFailure { Toast.makeText(a, "Update check failed: ${it.message}", Toast.LENGTH_LONG).show() }
+                result.onFailure { a.note("Update check failed: ${it.message}") }
                 result.onSuccess { (tag, url) ->
                     if (!newer(tag, BuildConfig.VERSION_NAME)) {
-                        Toast.makeText(a, "You are already on the latest version of UrsaPDF", Toast.LENGTH_SHORT).show()
+                        a.note("You are already on the latest version of UrsaPDF")
                         return@onSuccess
                     }
-                    Toast.makeText(a, "Update found, downloading version $tag", Toast.LENGTH_SHORT).show()
+                    a.note("Update found, downloading version $tag")
                     download(a, url)
                 }
             }
@@ -162,7 +162,7 @@ object Updater {
             val file = try {
                 fetch(a.applicationContext, url)
             } catch (e: Exception) {
-                a.runOnUiThread { Toast.makeText(a, "Download failed: ${e.message}", Toast.LENGTH_LONG).show() }
+                a.runOnUiThread { a.note("Download failed: ${e.message}") }
                 null
             }
             a.runOnUiThread { if (file != null && !a.isDestroyed) install(a, file) }
@@ -188,7 +188,7 @@ object Updater {
                 s.commit(pending.intentSender)
             }
         } catch (e: Exception) {
-            Toast.makeText(a, "Install failed: ${e.message}", Toast.LENGTH_LONG).show()
+            a.note("Install failed: ${e.message}")
         }
     }
 }

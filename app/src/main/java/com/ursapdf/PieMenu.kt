@@ -17,7 +17,9 @@ import kotlin.math.sin
  * A round menu under a held finger: a blank centre and one segment per item around it,
  * the first at the top, then clockwise. It fades in over 250 ms. The finger drags out
  * onto a segment, which turns yellow, and lifting there picks it; lifting on the
- * centre picks nothing. Either way it fades out over 250 ms.
+ * centre picks nothing. Either way it fades out over 250 ms. It opens by growing out
+ * of the finger rather than fading: a fade started while the chrome slid away could
+ * lose its first frames and pop in.
  *
  * The disc tilts toward the finger, as a weighted disc resting on a centre pin would
  * under a press: the side pressed dips away, up to [TILT] degrees at the rim.
@@ -30,7 +32,7 @@ class PieMenu(
     /** [enabled] false draws the segment dimmed and it cannot be picked. */
     class Item(val icon: Int, val name: String, val enabled: Boolean = true, val act: () -> Unit)
 
-    companion object { const val TILT = 12f }
+    companion object { const val TILT = 20f }
 
     private val outerR = a.dp(120f)
     private val innerR = a.dp(40f)
@@ -50,8 +52,18 @@ class PieMenu(
     private val onTheme: () -> Unit = { invalidate() }
     private val step get() = 360f / items.size
 
+    /**
+     * Opening grows the disc out of the finger, 0 to full size over 250 ms, ease-out.
+     * The scale is drawn, not a view property, so the tilt keeps its pivot on the centre.
+     */
+    private var grow = 0f
+    private val growAnim = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
+        duration = Motion.MS
+        interpolator = Motion.IN
+        addUpdateListener { grow = it.animatedValue as Float; invalidate() }
+    }
+
     init {
-        alpha = 0f
         cameraDistance = 8000f * a.resources.displayMetrics.density
         contentDescription = items.joinToString { it.name }
     }
@@ -59,11 +71,12 @@ class PieMenu(
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         Theme.listeners += onTheme
-        animate().alpha(1f).setDuration(Motion.MS).setInterpolator(Motion.FADE).start()
+        growAnim.start()
     }
 
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
+        growAnim.cancel()
         Theme.listeners -= onTheme
     }
 
@@ -109,6 +122,8 @@ class PieMenu(
     }
 
     override fun onDraw(c: Canvas) {
+        if (grow <= 0f) return
+        c.scale(grow, grow, downX, downY)
         oval.set(cx - outerR, cy - outerR, cx + outerR, cy + outerR)
         inner.set(cx - innerR, cy - innerR, cx + innerR, cy + innerR)
         fill.color = Theme.popup()

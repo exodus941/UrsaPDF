@@ -457,7 +457,7 @@ class HomeActivity : Activity() {
         }
     }
 
-    private fun toast(t: String) = Toast.makeText(this, t, Toast.LENGTH_SHORT).show()
+    private fun toast(t: String) = note(t)
 
     private fun refresh() {
         docs = Store.all(this)

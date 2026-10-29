@@ -52,6 +52,33 @@ fun View.fade(show: Boolean, gone: Boolean = true) {
         .withEndAction { if (!show) visibility = hidden }.start()
 }
 
+/**
+ * A short message in the app's own pill, near the bottom: fades in over 250 ms, holds
+ * 2 s, fades out. Used instead of a system toast, whose Android 12+ layout is a narrow
+ * box with the app icon pressed against the text, and wraps early.
+ */
+fun android.app.Activity.note(text: String) {
+    val host = findViewById<android.view.ViewGroup>(android.R.id.content) ?: return
+    host.findViewWithTag<View>("note")?.let { host.removeView(it) }
+    val bar = window.decorView.rootWindowInsets?.safe()?.get(3) ?: 0
+    val v = label(text, 14f, Theme.text(), bold = true).apply {
+        tag = "note"
+        background = pill(Theme.popup(), 14f).apply { setStroke(dpi(1), Theme.outline()) }
+        setPadding(dpi(16), dpi(10), dpi(16), dpi(10))
+        gravity = android.view.Gravity.CENTER
+        elevation = dp(8f)
+        alpha = 0f
+    }
+    host.addView(v, android.widget.FrameLayout.LayoutParams(
+        android.view.ViewGroup.LayoutParams.WRAP_CONTENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+        android.view.Gravity.BOTTOM or android.view.Gravity.CENTER_HORIZONTAL,
+    ).apply { bottomMargin = dpi(32) + bar; leftMargin = dpi(16); rightMargin = dpi(16) })
+    v.animate().alpha(1f).setDuration(Motion.MS).setInterpolator(Motion.FADE).withEndAction {
+        v.animate().alpha(0f).setStartDelay(2000).setDuration(Motion.MS).setInterpolator(Motion.FADE)
+            .withEndAction { host.removeView(v) }.start()
+    }.start()
+}
+
 /** Draw behind the system bars on every API level; views pad themselves by insets. */
 @Suppress("DEPRECATION")
 fun Window.edgeToEdge() {

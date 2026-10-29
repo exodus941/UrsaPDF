@@ -38,7 +38,7 @@ class PdfView(ctx: Context) : View(ctx) {
         fun onTap(x: Float, y: Float)
         fun onVerticalSwipe()
         fun onFieldTap(page: Int, f: Field) {}
-        /** A finger held still for 500 ms at (x, y); later moves of that touch are the listener's. */
+        /** A finger held still for 250 ms at (x, y); later moves of that touch are the listener's. */
         fun onLongPress(x: Float, y: Float) {}
     }
 
@@ -586,7 +586,7 @@ class PdfView(ctx: Context) : View(ctx) {
 
     // ---- long press ----
     // Our own, not GestureDetector's: its long press drops every later move, which froze
-    // quick scale. Held 500 ms within the touch slop, one finger, no double-tap.
+    // quick scale. Held 250 ms within the touch slop, one finger, no double-tap.
     private var holdX = 0f
     private var holdY = 0f
     private val hold = Runnable { held() }
@@ -605,7 +605,7 @@ class PdfView(ctx: Context) : View(ctx) {
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
         when (e.actionMasked) {
-            MotionEvent.ACTION_DOWN -> { holdX = e.x; holdY = e.y; lockHinted = false; removeCallbacks(hold); postDelayed(hold, 500) }
+            MotionEvent.ACTION_DOWN -> { holdX = e.x; holdY = e.y; lockHinted = false; removeCallbacks(hold); postDelayed(hold, 250) }
             MotionEvent.ACTION_MOVE -> if (kotlin.math.hypot(e.x - holdX, e.y - holdY) > touchSlop) cancelHold()
             MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> cancelHold()
         }

@@ -42,6 +42,8 @@ class PieMenu(
         const val MAX_RATE = 14.0625
         /** Ratchet: the cap at full pitch; it rises from MAX_RATE with the pitch. */
         const val FAST_RATE = 18.0
+        /** Ratchet: this long with no travel, in ms, and the finger counts as stopped. */
+        const val STILL = 40L
         /** Ratchet: the wanted rate at which the pitch is full, 2 turns a second at mid ring (25 notches a turn). */
         const val FULL_RATE = 50.0
         /**
@@ -99,7 +101,12 @@ class PieMenu(
     private var lastFrame = 0L
     private var due = false           // a tick is posted for later in this frame
     private var tone = 1.0            // pitch for the next tick: past the cap it rises with speed
-    private val dueTick = Runnable { due = false; phase -= 1; if (!closing) ratchet.tick(gap = 0, pitch = tone) }
+    // Notches the finger has really crossed and not yet ticked for, at most one. Smoothing
+    // alone kept the speed up for about 0.2 s after the finger stopped, and the ticks ran on.
+    private var owed = 0.0
+    private var movedAt = 0L          // frame time of the last travel, ns
+    private fun spend(): Boolean { if (owed < 1) return false; owed -= 1; return true }
+    private val dueTick = Runnable { due = false; phase -= 1; if (!closing && spend()) ratchet.tick(gap = 0, pitch = tone) }
     private val frame = object : android.view.Choreographer.FrameCallback {
         override fun doFrame(t: Long) {
             if (closing) return
@@ -108,7 +115,11 @@ class PieMenu(
             val dt = ((t - lastFrame) / 1e9).coerceIn(0.001, 0.1)
             lastFrame = t
             speed += (pendingPx / dt - speed) * (1 - kotlin.math.exp(-dt / SMOOTH))
+            if (pendingPx > 0f) movedAt = t
+            owed = minOf(1.0, owed + pendingPx / notchPx)
             pendingPx = 0f
+            // No travel for STILL: the finger has stopped, so the ratchet stops with it.
+            if (t - movedAt > STILL * 1_000_000) { speed = 0.0; phase = 0.0 }
             // Past MAX_RATE the rate holds, so the pitch carries the speed instead, up to half
             // an octave at FULL_RATE; the cap rises with it to FAST_RATE.
             val want = speed / notchPx
@@ -118,7 +129,7 @@ class PieMenu(
             if (rate < 0.5) return            // still, or as good as: the ratchet rests
             phase += rate * dt
             if (due) return
-            if (phase >= 1) { phase -= 1; ratchet.tick(gap = 0, pitch = tone); return }
+            if (phase >= 1) { phase -= 1; if (spend()) ratchet.tick(gap = 0, pitch = tone); return }
             // The next notch falls before the next frame: post it for its own moment.
             val wait = (1 - phase) / rate
             if (wait < dt * 1.5) { due = true; postDelayed(dueTick, (wait * 1000).toLong()) }
@@ -262,7 +273,7 @@ class PieMenu(
                     lastDeg = Double.NaN
                 } else {
                     // Out of the centre onto the ring: one tick at once, and the ratchet starts fresh.
-                    if (lastDeg.isNaN()) { ratchet.tick(); phase = 0.0 } else {
+                    if (lastDeg.isNaN()) { ratchet.tick(); phase = 0.0; owed = 0.0 } else {
                         val turn = ((angle - lastDeg + 540) % 360) - 180  // degrees, the short way round
                         pendingPx += (kotlin.math.abs(turn) * Math.PI / 180 * d).toFloat()
                     }

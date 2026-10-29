@@ -38,13 +38,33 @@ class PieMenu(
         const val NOTCH_DP = 20f
         /** Ratchet: the finger's speed is smoothed over this long (seconds), so uneven touch reports even out. */
         const val SMOOTH = 0.06
-        /** Ratchet: at most this many ticks a second, one per 71 ms (56.25% of the first 25); faster turns hold this rate, evenly. Set by the user; do not change unasked. */
+        /** Ratchet: at most this many ticks a second at the resting pitch, one per 71 ms (56.25% of the first 25). Set by the user; do not change unasked. */
         const val MAX_RATE = 14.0625
+        /** Ratchet: the cap at full pitch; it rises from MAX_RATE with the pitch. */
+        const val FAST_RATE = 18.0
+        /** Ratchet: the wanted rate at which the pitch is full, 2 turns a second at mid ring (25 notches a turn). */
+        const val FULL_RATE = 50.0
         /**
          * Without the ratchet: how long the finger must stay in a segment, or the centre,
          * before it ticks. 62.5 ms; Android's timers count whole milliseconds.
          */
         const val DWELL = 63L
+        /** Without the ratchet: the dwell at full pitch, so faster turns still tick per segment. */
+        const val FAST_DWELL = 42L
+        /** Without the ratchet: turns a second where the pitch starts rising, and where it is full. */
+        const val SLOW_TURNS = 0.5625
+        const val FULL_TURNS = 2.0
+        /** The top pitch: half an octave. */
+        const val PITCH = 1.4142135623730951
+        /** The beam: its width each side of the finger, in degrees, and its peak strength, 0..1. */
+        const val BEAM_HALF = 40f
+        const val BEAM_PEAK = 0.5f
+        /** The beam's eased fade, sampled at this many stops each side. */
+        const val BEAM_STOPS = 8
+
+        /** 0 below the start, 1 at and past the top, linear between. */
+        fun ramp(v: Double, start: Double, top: Double) = ((v - start) / (top - start)).coerceIn(0.0, 1.0)
+        fun pitch(f: Double) = Math.pow(PITCH, f)
     }
 
     private val outerR = a.dp(120f)
@@ -78,7 +98,8 @@ class PieMenu(
     private var phase = 0.0           // fraction of the way to the next tick
     private var lastFrame = 0L
     private var due = false           // a tick is posted for later in this frame
-    private val dueTick = Runnable { due = false; phase -= 1; if (!closing) ratchet.tick(gap = 0) }
+    private var tone = 1.0            // pitch for the next tick: past the cap it rises with speed
+    private val dueTick = Runnable { due = false; phase -= 1; if (!closing) ratchet.tick(gap = 0, pitch = tone) }
     private val frame = object : android.view.Choreographer.FrameCallback {
         override fun doFrame(t: Long) {
             if (closing) return
@@ -88,11 +109,16 @@ class PieMenu(
             lastFrame = t
             speed += (pendingPx / dt - speed) * (1 - kotlin.math.exp(-dt / SMOOTH))
             pendingPx = 0f
-            val rate = min(speed / notchPx, MAX_RATE)
+            // Past MAX_RATE the rate holds, so the pitch carries the speed instead, up to half
+            // an octave at FULL_RATE; the cap rises with it to FAST_RATE.
+            val want = speed / notchPx
+            val f = ramp(want, MAX_RATE, FULL_RATE)
+            tone = pitch(f)
+            val rate = min(want, MAX_RATE + (FAST_RATE - MAX_RATE) * f)
             if (rate < 0.5) return            // still, or as good as: the ratchet rests
             phase += rate * dt
             if (due) return
-            if (phase >= 1) { phase -= 1; ratchet.tick(gap = 0); return }
+            if (phase >= 1) { phase -= 1; ratchet.tick(gap = 0, pitch = tone); return }
             // The next notch falls before the next frame: post it for its own moment.
             val wait = (1 - phase) / rate
             if (wait < dt * 1.5) { due = true; postDelayed(dueTick, (wait * 1000).toLong()) }
@@ -100,7 +126,30 @@ class PieMenu(
     }
     private var region = -1           // under the finger: -1 the centre, else a segment, dimmed ones too
     private var ticked = -1           // the region the last tick was for
-    private val settle = Runnable { if (!closing && region != ticked) { ticked = region; ratchet.tick() } }
+    // Without the ratchet, speed still counts: the finger's turns a second, smoothed over
+    // SMOOTH, raise the pitch and shorten the dwell, both from SLOW_TURNS to FULL_TURNS.
+    private var turns = 0.0
+    private var turnDeg = Double.NaN  // angle at the last move on the ring
+    private var turnAt = 0L           // event time of that move
+    private fun turnsNow(): Double {
+        val idle = (android.os.SystemClock.uptimeMillis() - turnAt) / 1000.0
+        return turns * kotlin.math.exp(-idle.coerceAtLeast(0.0) / SMOOTH)
+    }
+    private val settle = Runnable {
+        if (!closing && region != ticked) { ticked = region; ratchet.tick(pitch = pitch(ramp(turnsNow(), SLOW_TURNS, FULL_TURNS))) }
+    }
+    // The beam: a soft yellow spotlight on the ring at the finger's angle, not bound to the
+    // segments. Screen-blended, so its strength is a colour, not an alpha; it fades in and
+    // out with the yellow, 62.5 ms, as the finger leaves or enters the centre.
+    private var beamDeg = 0f
+    private var beam = 0f
+    private var onRing = false
+    private val screen = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SCREEN)
+    private val multiply = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.MULTIPLY)
+    private val beamPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val beamCols = IntArray(BEAM_STOPS * 2 + 1)
+    private val beamPos = FloatArray(BEAM_STOPS * 2 + 1)
+    private val beamTurn = android.graphics.Matrix()
     // Each segment's yellow, 0..1; it moves toward its target over 62.5 ms, linear.
     private val lit = FloatArray(items.size)
     private var litAt = 0L            // last fade step; 0 while every segment is settled
@@ -187,8 +236,26 @@ class PieMenu(
                 // 0 degrees at the top, rising clockwise.
                 val angle = (Math.toDegrees(atan2(dx.toDouble(), -dy.toDouble())) + 360) % 360
                 val r = if (d < innerR) -1 else (((angle + step / 2) % 360) / step).toInt().coerceAtMost(items.size - 1)
+                if (r >= 0) {
+                    if (!turnDeg.isNaN() && e.eventTime > turnAt) {
+                        val dt = (e.eventTime - turnAt) / 1000.0
+                        val now = kotlin.math.abs(((angle - turnDeg + 540) % 360) - 180) / 360 / dt
+                        turns += (now - turns) * (1 - kotlin.math.exp(-dt / SMOOTH))
+                    }
+                    turnDeg = angle; turnAt = e.eventTime
+                } else { turnDeg = Double.NaN; turns = 0.0 }
+                if ((r >= 0) != onRing || r >= 0) {
+                    onRing = r >= 0
+                    if (onRing) beamDeg = angle.toFloat()
+                    if (litAt == 0L) litAt = android.os.SystemClock.uptimeMillis()
+                    invalidate()
+                }
                 if (!rotary) {
-                    if (r != region) { region = r; removeCallbacks(settle); postDelayed(settle, DWELL) }
+                    if (r != region) {
+                        region = r; removeCallbacks(settle)
+                        val f = ramp(turnsNow(), SLOW_TURNS, FULL_TURNS)
+                        postDelayed(settle, DWELL - ((DWELL - FAST_DWELL) * f).toLong())
+                    }
                 } else if (r < 0) {
                     // Back into the centre: one tick, then silence while it stays there.
                     if (!lastDeg.isNaN()) ratchet.tick()
@@ -230,6 +297,32 @@ class PieMenu(
         pick?.act?.invoke()
     }
 
+    // A sweep gradient round the centre: black (no change under Screen) far from the finger,
+    // rising with an ease-in-out curve to BEAM_PEAK of the yellow at the finger's angle.
+    // The centre disc, drawn after, covers its middle, so it lights only the ring.
+    private fun drawBeam(c: Canvas) {
+        // Screen cannot brighten the light theme's white disc, so in light mode the beam
+        // multiplies instead, white (no change) rising to the yellow.
+        val light = Theme.light
+        beamPaint.xfermode = if (light) multiply else screen
+        val span = BEAM_HALF / 360f
+        for (i in 0..BEAM_STOPS * 2) {
+            val u = (i - BEAM_STOPS) / BEAM_STOPS.toFloat()      // -1 .. 1 across the beam
+            val t = 1 - kotlin.math.abs(u)
+            val k = t * t * (3 - 2 * t) * BEAM_PEAK * beam
+            fun ch(v: Int) = if (light) (255 - (255 - v) * k).toInt() else (v * k).toInt()
+            beamCols[i] = android.graphics.Color.rgb(
+                ch(android.graphics.Color.red(ACCENT)), ch(android.graphics.Color.green(ACCENT)), ch(android.graphics.Color.blue(ACCENT)))
+            beamPos[i] = 0.5f + u * span
+        }
+        // The gradient's 0.5 sits at the finger: 0 degrees is the top, a sweep's 0 is +x.
+        val sweep = android.graphics.SweepGradient(cx, cy, beamCols, beamPos)
+        beamTurn.setRotate(beamDeg - 90f - 180f, cx, cy)
+        sweep.setLocalMatrix(beamTurn)
+        beamPaint.shader = sweep
+        c.drawOval(oval, beamPaint)
+    }
+
     override fun onDraw(c: Canvas) {
         if (grow <= 0f) return
         c.scale(grow, grow, downX, downY)
@@ -247,6 +340,9 @@ class PieMenu(
             lit[k] = if (lit[k] < want) minOf(want, lit[k] + dt) else maxOf(want, lit[k] - dt)
             if (lit[k] != want) moving = true
         }
+        val beamWant = if (onRing) 1f else 0f
+        beam = if (beam < beamWant) minOf(beamWant, beam + dt) else maxOf(beamWant, beam - dt)
+        if (beam != beamWant) moving = true
         if (moving) postInvalidateOnAnimation() else litAt = 0L
         // A lit segment: a ring sector, centred on its angle.
         for (k in lit.indices) {
@@ -261,6 +357,7 @@ class PieMenu(
             c.drawPath(wedge, fill)
             fill.alpha = 255
         }
+        if (beam > 0f) drawBeam(c)
         edge.color = Theme.line()
         for (k in items.indices) {
             val r = Math.toRadians((-90f + k * step - step / 2).toDouble())

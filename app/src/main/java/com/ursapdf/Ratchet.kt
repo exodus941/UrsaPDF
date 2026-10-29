@@ -65,13 +65,16 @@ class Ratchet {
         }
     }
 
-    /** [gap]: the least time since the last tick, in ms; a tick sooner is dropped. */
-    fun tick(gap: Long = 35) {
+    /**
+     * [gap]: the least time since the last tick, in ms; a tick sooner is dropped.
+     * [pitch]: playback speed, 1 as made; above 1 it is higher and shorter.
+     */
+    fun tick(gap: Long = 35, pitch: Double = 1.0) {
         val t = track ?: return
         val now = SystemClock.uptimeMillis()
         if (now - last < gap) return
         last = now
-        try { t.stop(); t.reloadStaticData(); t.play() } catch (_: Exception) {}
+        try { t.stop(); t.playbackRate = (rate * pitch).toInt(); t.reloadStaticData(); t.play() } catch (_: Exception) {}
     }
 
     fun release() = track?.release()

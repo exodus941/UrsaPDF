@@ -417,6 +417,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
             Menu.Row("Invert Colours", mark = { toggle(state?.invert == true) }, stay = true) { toggleInvert() },
             Menu.Row("Dark Mode", mark = { toggle(!Theme.light) }, stay = true) { Theme.toggle(this) },
             Menu.Row("Zoom Lock", mark = { toggle(pdf.lockZoom > 0f) }, stay = true) { toggleLock() },
+            Menu.Row("Left-Handed Pie", mark = { toggle(leftPie) }, stay = true) { leftPie = !leftPie },
         ))
     }
 
@@ -445,6 +446,11 @@ class ReaderActivity : Activity(), PdfView.Listener {
     // ---- pie menu ----
     private var pie: PieMenu? = null
 
+    /** The pie mirrored for a left thumb; for every file. */
+    private var leftPie: Boolean
+        get() = getSharedPreferences("ursa", MODE_PRIVATE).getBoolean("leftPie", false)
+        set(v) { getSharedPreferences("ursa", MODE_PRIVATE).edit().putBoolean("leftPie", v).apply() }
+
     /** A page held still for 250 ms. The chrome and any search slide away as the pie opens. */
     override fun onLongPress(x: Float, y: Float) {
         if (eng == null || pie != null) return
@@ -453,17 +459,17 @@ class ReaderActivity : Activity(), PdfView.Listener {
         closeBookmarks()
         hideUi()
         val marked = pdf.currentPage in (state?.bookmarks ?: emptyMap<Int, String>())
-        val p = PieMenu(this, listOf(
-            PieMenu.Item(R.drawable.ic_search, "Search", tools?.canSearch == true) { showUi(); openSearch() },
-            PieMenu.Item(R.drawable.ic_frame, "Page Cropper") { openCropper() },
-            PieMenu.Item(if (marked) R.drawable.ic_bookmark_minus else R.drawable.ic_bookmark, if (marked) "Remove Bookmark" else "Add Bookmark") { toggleBookmark() },
-            PieMenu.Item(R.drawable.ic_bookmarks, "Show Bookmarks") { showBookmarks() },
-            PieMenu.Item(R.drawable.ic_invert, "Invert Colours") { toggleInvert() },
-            PieMenu.Item(R.drawable.ic_moon, "Dark Mode") { Theme.toggle(this) },
-            PieMenu.Item(R.drawable.ic_lock, "Zoom Lock") { toggleLock() },
-            // The top bar comes back and its timeout menu opens once the bar is in.
-            PieMenu.Item(R.drawable.ic_timeout, "Screen Timeout") { showUi(); root.postDelayed({ if (uiShown) timeoutMenu() }, Motion.MS) },
-        ), x, y) { root.removeView(it) }
+        // Clockwise from the top, for a right thumb: the most used up and to the left, the
+        // rarest bottom right, under the thumb. Left-handed mirrors it side to side.
+        val add = PieMenu.Item(if (marked) R.drawable.ic_bookmark_minus else R.drawable.ic_bookmark, if (marked) "Remove Bookmark" else "Add Bookmark") { toggleBookmark() }
+        val invert = PieMenu.Item(R.drawable.ic_invert, "Invert Colours") { toggleInvert() }
+        val crop = PieMenu.Item(R.drawable.ic_frame, "Page Cropper") { openCropper() }
+        val lock = PieMenu.Item(R.drawable.ic_lock, "Zoom Lock") { toggleLock() }
+        val find = PieMenu.Item(R.drawable.ic_search, "Search", tools?.canSearch == true) { showUi(); openSearch() }
+        val list = PieMenu.Item(R.drawable.ic_bookmarks, "Show Bookmarks") { showBookmarks() }
+        val right = listOf(add, invert, crop, lock, find, list)
+        val items = if (leftPie) listOf(add) + right.drop(1).reversed() else right
+        val p = PieMenu(this, items, x, y) { root.removeView(it) }
         pie = p
         root.addView(p, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
     }

@@ -51,6 +51,14 @@ class PieMenu(
     private val inner = RectF()
     private val onTheme: () -> Unit = { invalidate() }
     private val step get() = 360f / items.size
+    // Finger travel ticks the ratchet; a faster finger crosses more notches a second.
+    private val ratchet = Ratchet(a)
+    private var lastX = x
+    private var lastY = y
+    // Each segment's yellow, 0..1; it moves toward its target over 62.5 ms, linear.
+    private val lit = FloatArray(items.size)
+    private var litAt = 0L            // last fade step; 0 while every segment is settled
+    private val blend = android.animation.ArgbEvaluator()
 
     /**
      * Opening grows the disc out of the finger, 0 to full size over 250 ms, ease-out.
@@ -77,6 +85,7 @@ class PieMenu(
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
         growAnim.cancel()
+        ratchet.release()
         Theme.listeners -= onTheme
     }
 
@@ -95,12 +104,18 @@ class PieMenu(
         val d = hypot(dx, dy)
         when (e.actionMasked) {
             MotionEvent.ACTION_MOVE -> {
+                ratchet.move(hypot(e.x - lastX, e.y - lastY))
+                lastX = e.x; lastY = e.y
                 val k = if (d < innerR) -1 else {
                     // 0 degrees at the top, rising clockwise; each segment centres on its angle.
                     val deg = (Math.toDegrees(atan2(dx.toDouble(), -dy.toDouble())) + 360 + step / 2) % 360
                     (deg / step).toInt().takeIf { items[it].enabled } ?: -1
                 }
-                if (k != sel) { sel = k; invalidate() }
+                if (k != sel) {
+                    sel = k
+                    if (litAt == 0L) litAt = android.os.SystemClock.uptimeMillis()  // the fade starts now
+                    invalidate()
+                }
                 val f = min(1f, d / outerR) * TILT / d.coerceAtLeast(1f)
                 // Measured: these signs push the pressed side away from the viewer.
                 rotationY = dx * f
@@ -128,15 +143,29 @@ class PieMenu(
         inner.set(cx - innerR, cy - innerR, cx + innerR, cy + innerR)
         fill.color = Theme.popup()
         c.drawOval(oval, fill)
-        // The picked segment: a ring sector, centred on its angle.
-        if (sel >= 0) {
-            val start = -90f + sel * step - step / 2
+        // Step every segment's yellow toward its target by the time since the last frame.
+        val now = android.os.SystemClock.uptimeMillis()
+        val dt = if (litAt == 0L) 0f else (now - litAt) / 62.5f
+        litAt = now
+        var moving = false
+        for (k in lit.indices) {
+            val want = if (k == sel) 1f else 0f
+            lit[k] = if (lit[k] < want) minOf(want, lit[k] + dt) else maxOf(want, lit[k] - dt)
+            if (lit[k] != want) moving = true
+        }
+        if (moving) postInvalidateOnAnimation() else litAt = 0L
+        // A lit segment: a ring sector, centred on its angle.
+        for (k in lit.indices) {
+            if (lit[k] <= 0f) continue
+            val start = -90f + k * step - step / 2
             wedge.reset()
             wedge.arcTo(oval, start, step)
             wedge.arcTo(inner, start + step, -step)
             wedge.close()
             fill.color = ACCENT
+            fill.alpha = (255 * lit[k]).toInt()
             c.drawPath(wedge, fill)
+            fill.alpha = 255
         }
         edge.color = Theme.line()
         for (k in items.indices) {
@@ -155,7 +184,7 @@ class PieMenu(
             val iy = (cy + mid * sin(r)).toInt() - iconPx / 2
             val d = icons[k]
             d.setBounds(ix, iy, ix + iconPx, iy + iconPx)
-            d.setTint(if (k == sel) BG else if (it.enabled) Theme.text() else Theme.sub())
+            d.setTint(if (it.enabled) blend.evaluate(lit[k], Theme.text(), BG) as Int else Theme.sub())
             d.alpha = if (it.enabled) 255 else 90
             d.draw(c)
         }

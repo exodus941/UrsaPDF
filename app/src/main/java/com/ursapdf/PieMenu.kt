@@ -159,7 +159,11 @@ class PieMenu(
                 val r = if (d < innerR) -1 else (((angle + step / 2) % 360) / step).toInt().coerceAtMost(items.size - 1)
                 if (!rotary) {
                     if (r != region) { region = r; removeCallbacks(settle); postDelayed(settle, DWELL) }
-                } else if (r < 0) lastDeg = Double.NaN else {
+                } else if (r < 0) {
+                    // Back into the centre: one tick, then silence while it stays there.
+                    if (!lastDeg.isNaN()) ratchet.tick()
+                    lastDeg = Double.NaN
+                } else {
                     // Out of the centre onto the ring: one tick at once, and the ratchet starts fresh.
                     if (lastDeg.isNaN()) { ratchet.tick(); phase = 0.0 } else {
                         val turn = ((angle - lastDeg + 540) % 360) - 180  // degrees, the short way round

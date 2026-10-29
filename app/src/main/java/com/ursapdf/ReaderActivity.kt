@@ -143,7 +143,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
         top.addView(titleView, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { marginEnd = dpi(16) })
         searchBtn = iconButton(R.drawable.ic_search, "Search") { openSearch() }.apply { visibility = View.GONE }
         top.addView(searchBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)))
-        cropBtn = iconButton(R.drawable.ic_crop, "Page Cropper") { openCropper() }
+        cropBtn = iconButton(R.drawable.ic_frame, "Page Cropper") { openCropper() }
         top.addView(cropBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)))
         // Only for PDFs that are forms; shown once the open document says so.
         editBtn = iconButton(R.drawable.ic_rename, "Fill in Form") { toggleForm() }.apply { visibility = View.GONE }
@@ -233,7 +233,8 @@ class ReaderActivity : Activity(), PdfView.Listener {
         e.crop.set(s.crop)
         e.invert = if (s.invert) 1f else 0f
         titleView.text = s.name
-        pdf.setDocument(e, s.page.coerceIn(0, e.pageCount - 1), s.offset, s.x, s.zoom)
+        pdf.lockZoom = s.lock
+        pdf.setDocument(e, s.page.coerceIn(0, e.pageCount - 1), s.offset, s.x, if (s.lock > 0f) s.lock else s.zoom)
 
         val st = ThumbStrip(this, e) { pdf.jumpTo(it) }.apply {
             setBackgroundColor(Theme.panel())
@@ -415,22 +416,55 @@ class ReaderActivity : Activity(), PdfView.Listener {
         openMenu(moreBtn, listOf(
             Menu.Row("Invert Colours", mark = { toggle(state?.invert == true) }, stay = true) { toggleInvert() },
             Menu.Row("Dark Mode", mark = { toggle(!Theme.light) }, stay = true) { Theme.toggle(this) },
+            Menu.Row("Zoom Lock", mark = { toggle(pdf.lockZoom > 0f) }, stay = true) { toggleLock() },
         ))
     }
 
+    /** Locks the zoom the page is at now, for this file. */
+    private fun toggleLock() {
+        pdf.lockZoom = if (pdf.lockZoom > 0f) 0f else pdf.zoom
+        save()
+    }
+
     private fun bookmarkMenu() {
-        val s = state ?: return
-        val page = pdf.currentPage
-        val marked = page in s.bookmarks
         openMenu(bookmarkBtn, listOf(
-            Menu.Row(if (marked) "Remove Bookmark" else "Add Bookmark") {
-                if (marked) {
-                    s.bookmarks -= page; save()
-                    toast("Bookmark removed from page ${page + 1}")
-                } else nameBookmark(page, "Add Bookmark", "Save") { toast("Bookmarked page ${page + 1}") }
-            },
+            Menu.Row(if (pdf.currentPage in (state?.bookmarks ?: return)) "Remove Bookmark" else "Add Bookmark") { toggleBookmark() },
             Menu.Row("Show Bookmarks") { showBookmarks() },
         ))
+    }
+
+    private fun toggleBookmark() {
+        val s = state ?: return
+        val page = pdf.currentPage
+        if (page in s.bookmarks) {
+            s.bookmarks -= page; save()
+            toast("Bookmark removed from page ${page + 1}")
+        } else nameBookmark(page, "Add Bookmark", "Save") { toast("Bookmarked page ${page + 1}") }
+    }
+
+    // ---- pie menu ----
+    private var pie: PieMenu? = null
+
+    /** A page held still for 500 ms. The chrome slides away while the pie fades in. */
+    override fun onLongPress(x: Float, y: Float) {
+        if (eng == null || searching || pie != null) return
+        menu.dismiss()
+        closeBookmarks()
+        hideUi()
+        val marked = pdf.currentPage in (state?.bookmarks ?: emptyMap<Int, String>())
+        val p = PieMenu(this, listOf(
+            PieMenu.Item(R.drawable.ic_search, "Search", tools?.canSearch == true) { showUi(); openSearch() },
+            PieMenu.Item(R.drawable.ic_frame, "Page Cropper") { openCropper() },
+            PieMenu.Item(if (marked) R.drawable.ic_bookmark_minus else R.drawable.ic_bookmark, if (marked) "Remove Bookmark" else "Add Bookmark") { toggleBookmark() },
+            PieMenu.Item(R.drawable.ic_bookmarks, "Show Bookmarks") { showBookmarks() },
+            PieMenu.Item(R.drawable.ic_invert, "Invert Colours") { toggleInvert() },
+            PieMenu.Item(R.drawable.ic_moon, "Dark Mode") { Theme.toggle(this) },
+            PieMenu.Item(R.drawable.ic_lock, "Zoom Lock") { toggleLock() },
+            // The top bar comes back and its timeout menu opens once the bar is in.
+            PieMenu.Item(R.drawable.ic_timeout, "Screen Timeout") { showUi(); root.postDelayed({ if (uiShown) timeoutMenu() }, Motion.MS) },
+        ), x, y) { root.removeView(it) }
+        pie = p
+        root.addView(p, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
     }
 
     private fun bookmarkName(p: Int) = state?.bookmarks?.get(p)?.takeIf { it.isNotBlank() } ?: "Page ${p + 1}"
@@ -563,6 +597,17 @@ class ReaderActivity : Activity(), PdfView.Listener {
 
     override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
         if (ev.actionMasked == android.view.MotionEvent.ACTION_DOWN) awake()
+        // The rest of the touch that opened the pie belongs to it.
+        pie?.let { p ->
+            val m = android.view.MotionEvent.obtain(ev).apply { offsetLocation(-p.left.toFloat(), -p.top.toFloat()) }
+            p.touch(m); m.recycle()
+            val end = ev.actionMasked
+            if (end == android.view.MotionEvent.ACTION_UP || end == android.view.MotionEvent.ACTION_CANCEL || end == android.view.MotionEvent.ACTION_DOWN) {
+                if (end == android.view.MotionEvent.ACTION_DOWN) p.close()
+                pie = null
+            }
+            return true
+        }
         return super.dispatchTouchEvent(ev)
     }
 
@@ -579,6 +624,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
         val c = cropper ?: return
         cropper = null
         if (r != null && r != e.crop) {
+            pdf.lockZoom = 0f  // a new frame wants a new zoom
             e.setCrop(r)
             pdf.onCropChanged()
             save()
@@ -590,7 +636,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
         val s = state ?: return
         val e = eng ?: return
         val p = pdf.position()
-        s.page = p[0].toInt(); s.offset = p[1]; s.x = p[2]; s.zoom = pdf.zoom
+        s.page = p[0].toInt(); s.offset = p[1]; s.x = p[2]; s.zoom = pdf.zoom; s.lock = pdf.lockZoom
         s.crop.set(e.crop)
         s.opened = System.currentTimeMillis()
         Store.put(this, s)
@@ -915,6 +961,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
     override fun onBackPressed() {
         when {
             gate.showing -> {}  // the library download cannot be dismissed
+            pie != null -> { pie?.close(); pie = null }
             menu.showing -> menu.dismiss()
             sheetOpen -> closeBookmarks()
             modal.showing -> modal.cancel()

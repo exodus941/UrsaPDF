@@ -144,7 +144,7 @@ class Menu(private val a: Activity, private val host: View) {
 
     private fun paint() {
         val b = box ?: return
-        outer?.background = a.pill(Theme.popup(), 12f)
+        outer?.background = a.pill(Theme.popup(), 12f).apply { setStroke(a.dpi(1), Theme.outline()) }
         for (i in 0 until b.childCount) {
             val v = b.getChildAt(i)
             if (v.tag == "empty") { (v as TextView).setTextColor(Theme.sub()); continue }

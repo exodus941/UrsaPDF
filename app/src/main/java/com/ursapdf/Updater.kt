@@ -1,7 +1,6 @@
 package com.ursapdf
 
 import android.app.Activity
-import android.app.AlertDialog
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -10,7 +9,6 @@ import android.content.pm.PackageInstaller
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.widget.ProgressBar
 import android.widget.Toast
 import org.json.JSONObject
 import java.io.File
@@ -127,9 +125,8 @@ object Updater {
         }.start()
     }
 
-    /** The menu item: says what it finds, shows download progress, installs at once. */
+    /** The Update button: a toast says what it found; a newer version downloads and installs at once. */
     fun check(a: Activity) {
-        Toast.makeText(a, "Checking for updates…", Toast.LENGTH_SHORT).show()
         lastCheck = System.currentTimeMillis()
         Thread {
             val result = try { Result.success(latest()) } catch (e: Exception) { Result.failure(e) }
@@ -137,14 +134,12 @@ object Updater {
                 if (a.isFinishing) return@runOnUiThread
                 result.onFailure { Toast.makeText(a, "Update check failed: ${it.message}", Toast.LENGTH_LONG).show() }
                 result.onSuccess { (tag, url) ->
-                    val isNewer = newer(tag, BuildConfig.VERSION_NAME)
-                    AlertDialog.Builder(a, Theme.dialogTheme())
-                        .setTitle(if (isNewer) "Update available" else "Up to date")
-                        .setMessage(if (isNewer) "UrsaPDF $tag is available. You have ${BuildConfig.VERSION_NAME}."
-                            else "You have the latest version (${BuildConfig.VERSION_NAME}).")
-                        .setPositiveButton(if (isNewer) "Download" else "OK") { _, _ -> if (isNewer) download(a, url) }
-                        .apply { if (!isNewer) setNeutralButton("Reinstall") { _, _ -> download(a, url) } }
-                        .show()
+                    if (!newer(tag, BuildConfig.VERSION_NAME)) {
+                        Toast.makeText(a, "You are already on the latest version of UrsaPDF", Toast.LENGTH_SHORT).show()
+                        return@onSuccess
+                    }
+                    Toast.makeText(a, "Update found, downloading version $tag", Toast.LENGTH_SHORT).show()
+                    download(a, url)
                 }
             }
         }.start()
@@ -161,23 +156,16 @@ object Updater {
         return false
     }
 
+    /** In the background, no dialog; the install follows as soon as the file is in. */
     private fun download(a: Activity, url: String) {
-        val bar = ProgressBar(a, null, android.R.attr.progressBarStyleHorizontal).apply {
-            max = 100
-            setPadding(a.dpi(24), a.dpi(16), a.dpi(24), a.dpi(8))
-        }
-        val dlg = AlertDialog.Builder(a, Theme.dialogTheme()).setTitle("Downloading UrsaPDF").setView(bar).setCancelable(false).show()
         Thread {
             val file = try {
-                fetch(a.applicationContext, url) { p -> a.runOnUiThread { bar.progress = p } }
+                fetch(a.applicationContext, url)
             } catch (e: Exception) {
                 a.runOnUiThread { Toast.makeText(a, "Download failed: ${e.message}", Toast.LENGTH_LONG).show() }
                 null
             }
-            a.runOnUiThread {
-                dlg.dismiss()
-                if (file != null) install(a, file)
-            }
+            a.runOnUiThread { if (file != null && !a.isDestroyed) install(a, file) }
         }.start()
     }
 

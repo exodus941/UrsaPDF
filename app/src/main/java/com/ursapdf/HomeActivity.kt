@@ -42,6 +42,7 @@ class HomeActivity : Activity() {
     private lateinit var frame: FrameLayout
     private lateinit var root: LinearLayout
     private lateinit var title: TextView
+    private lateinit var version: TextView
     private lateinit var themeBtn: ImageView
     private lateinit var updateBtn: ImageView
     private lateinit var sticky: LinearLayout
@@ -76,7 +77,14 @@ class HomeActivity : Activity() {
             setPadding(dpi(20), dpi(12), dpi(8), dpi(8))
         }
         title = label("UrsaPDF", 24f, Theme.text(), bold = true)
-        header.addView(title, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+        version = label(BuildConfig.VERSION_NAME, 13f, Theme.text(), bold = true)
+        // TOP gravity, not centre: only then does LinearLayout line the two baselines up.
+        header.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.TOP
+            addView(title)
+            addView(version, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginStart = dpi(8) })
+        }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
         themeBtn = iconButton(R.drawable.ic_bulb_on, "Toggle Light Mode") { Theme.toggle(this) }
         header.addView(themeBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)))
         updateBtn = iconButton(R.drawable.ic_refresh, "Check for Updates") { Updater.check(this) }
@@ -256,6 +264,7 @@ class HomeActivity : Activity() {
         window.decorView.setBackgroundColor(Theme.bg())
         sticky.setBackgroundColor(Theme.bg())
         title.setTextColor(Theme.text())
+        version.setTextColor(Theme.text())
         for (b in listOf(themeBtn, updateBtn, clear)) {
             b.setColorFilter(Theme.text())
             (b.background as? RippleDrawable)?.setColor(ColorStateList.valueOf(Theme.ripple()))

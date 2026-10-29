@@ -38,6 +38,8 @@ class PdfView(ctx: Context) : View(ctx) {
         fun onTap(x: Float, y: Float)
         fun onVerticalSwipe()
         fun onFieldTap(page: Int, f: Field) {}
+        /** A finger held still for 500 ms at (x, y); later moves of that touch are the listener's. */
+        fun onLongPress(x: Float, y: Float) {}
     }
 
     companion object {
@@ -211,9 +213,72 @@ class PdfView(ctx: Context) : View(ctx) {
         invalidate()
     }
 
+    // ---- zoom lock ----
+
+    /**
+     * The locked zoom, 0 when off. While locked, pinch, double-tap and double-tap drag
+     * do not zoom; they flash a lock in the centre instead. Drags still pan, and a new
+     * page opens at the same zoom, at its top left.
+     */
+    var lockZoom = 0f
+        set(v) { field = v; if (v > 0f && fit.isNotEmpty()) { zoom = v.coerceIn(1f, MAX_ZOOM); changed() } }
+    private val locked get() = lockZoom > 0f
+    private var lockShown = 0f
+    private var lockAnim: ValueAnimator? = null
+    private var lockHinted = false  // one flash per touch
+    private val lockIcon = ctx.getDrawable(R.drawable.ic_lock)!!.mutate()
+    private val lockBox = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val lockRect = RectF()
+
+    /** 62.5 ms in, held to 500 ms, 250 ms out; linear. A new attempt restarts it. */
+    private fun lockHint() {
+        if (lockHinted) return
+        lockHinted = true
+        lockAnim?.cancel()
+        val from = lockShown
+        // Time in ms from 0 to 750: rising from where it is over 62.5 ms, full to 500, then out.
+        lockAnim = ValueAnimator.ofFloat(0f, 750f).apply {
+            duration = 750
+            interpolator = android.view.animation.LinearInterpolator()
+            addUpdateListener {
+                val ms = it.animatedValue as Float
+                lockShown = when {
+                    ms < 62.5f -> from + (1f - from) * ms / 62.5f
+                    ms < 500f -> 1f
+                    else -> 1f - (ms - 500f) / 250f
+                }
+                invalidate()
+            }
+            start()
+        }
+    }
+
+    /**
+     * A dark see-through box multiplied over the page with a white lock; on an inverted
+     * page a light box screened over it with a dark lock.
+     */
+    private fun drawLock(c: Canvas, e: PdfEngine) {
+        if (lockShown <= 0f) return
+        val inv = e.invert > 0.5f
+        val s = context.dp(96f); val r = context.dp(20f)
+        lockRect.set((width - s) / 2, (height - s) / 2, (width + s) / 2, (height + s) / 2)
+        // Multiply and screen ignore paint alpha, so the strength is an opaque grey:
+        // multiply by 40% grey darkens what is behind by 60%; screen by 60% grey lightens it as much.
+        val k = 0.6f * lockShown
+        val g = ((if (inv) k else 1f - k) * 255).toInt()
+        lockBox.color = Color.rgb(g, g, g)
+        lockBox.xfermode = android.graphics.PorterDuffXfermode(if (inv) android.graphics.PorterDuff.Mode.SCREEN else android.graphics.PorterDuff.Mode.MULTIPLY)
+        c.drawRoundRect(lockRect, r, r, lockBox)
+        val i = context.dpi(48); val l = (width - i) / 2; val t = (height - i) / 2
+        lockIcon.setBounds(l, t, l + i, t + i)
+        lockIcon.setTint(if (inv) 0xFF111111.toInt() else Color.WHITE)
+        lockIcon.alpha = (255 * lockShown).toInt()
+        lockIcon.draw(c)
+    }
+
     /** [turned]: the page moved under a swipe, not a jump from the strip. */
     private fun setPage(p: Int, turned: Boolean = false) {
-        shift = 0f; zoom = 1f; sx = 0f; sy = 0f
+        shift = 0f; zoom = if (locked) lockZoom.coerceIn(1f, MAX_ZOOM) else 1f; sx = 0f; sy = 0f
         scroller.forceFinished(true)
         if (p != currentPage) {
             currentPage = p
@@ -276,6 +341,7 @@ class PdfView(ctx: Context) : View(ctx) {
 
     private val scaleDet = ScaleGestureDetector(ctx, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
         override fun onScaleBegin(d: ScaleGestureDetector): Boolean {
+            if (locked) { lockHint(); return false }
             scaling = true
             dragZoomed = true  // also true for a two-finger pinch; only read on a double-tap
             zoomAnim?.cancel()
@@ -370,6 +436,14 @@ class PdfView(ctx: Context) : View(ctx) {
          * without a drag, it toggles between fit and 2.5x.
          */
         override fun onDoubleTapEvent(e: MotionEvent): Boolean {
+            cancelHold()  // a held second tap is a zoom, never the pie menu
+            if (locked) {
+                // Locked: a drag or a plain double-tap only flashes the lock.
+                val moved = e.actionMasked == MotionEvent.ACTION_MOVE && abs(e.y - qsY) > touchSlop
+                if (e.actionMasked == MotionEvent.ACTION_DOWN) qsY = e.y
+                if (moved || e.actionMasked == MotionEvent.ACTION_UP) lockHint()
+                return true
+            }
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     qsX = e.x; qsY = e.y; qsZoom = zoom; qsActive = false
@@ -510,7 +584,31 @@ class PdfView(ctx: Context) : View(ctx) {
         }
     }
 
+    // ---- long press ----
+    // Our own, not GestureDetector's: its long press drops every later move, which froze
+    // quick scale. Held 500 ms within the touch slop, one finger, no double-tap.
+    private var holdX = 0f
+    private var holdY = 0f
+    private val hold = Runnable { held() }
+
+    private fun held() {
+        if (drag != Drag.NONE || scaling || shift != 0f) return
+        // The view lets go of this touch; the listener takes its later moves.
+        val now = android.os.SystemClock.uptimeMillis()
+        val c = MotionEvent.obtain(now, now, MotionEvent.ACTION_CANCEL, holdX, holdY, 0)
+        scaleDet.onTouchEvent(c); gestures.onTouchEvent(c); c.recycle()
+        drag = Drag.NONE
+        listener?.onLongPress(holdX, holdY)
+    }
+
+    private fun cancelHold() = removeCallbacks(hold)
+
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> { holdX = e.x; holdY = e.y; lockHinted = false; removeCallbacks(hold); postDelayed(hold, 500) }
+            MotionEvent.ACTION_MOVE -> if (kotlin.math.hypot(e.x - holdX, e.y - holdY) > touchSlop) cancelHold()
+            MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> cancelHold()
+        }
         if (e.actionMasked == MotionEvent.ACTION_DOWN) {
             // A touch during a turn finishes it at once, so the next drag starts clean.
             turnAnim?.let { if (it.isRunning) it.end() }
@@ -569,6 +667,7 @@ class PdfView(ctx: Context) : View(ctx) {
             if (e.needs(PdfEngine.key(PdfEngine.BASE, p))) want += baseReq(e, p)
         }
         e.submit(PdfEngine.Q_VIEW, want)
+        drawLock(canvas, e)
     }
 
     // ---- search hits ----
@@ -610,7 +709,7 @@ class PdfView(ctx: Context) : View(ctx) {
         if (page != currentPage) setPage(page)
         scroller.forceFinished(true)
         bandTop = visTop; bandBottom = height - visBottom
-        zoom = max(zoom, 2f)
+        if (!locked) zoom = max(zoom, 2f)
         val s = fit[page] * zoom
         val cx = (rect.centerX() - e.crop.left * e.pw[page]) * s
         val cy = (rect.centerY() - e.crop.top * e.ph[page]) * s

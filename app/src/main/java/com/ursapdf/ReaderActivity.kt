@@ -418,6 +418,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
             Menu.Row("Dark Mode", mark = { toggle(!Theme.light) }, stay = true) { Theme.toggle(this) },
             Menu.Row("Zoom Lock", mark = { toggle(pdf.lockZoom > 0f) }, stay = true) { toggleLock() },
             Menu.Row("Left-Handed Pie", mark = { toggle(leftPie) }, stay = true) { leftPie = !leftPie },
+            Menu.Row("Ratchet", mark = { toggle(ratchetPie) }, stay = true) { ratchetPie = !ratchetPie },
         ))
     }
 
@@ -451,6 +452,11 @@ class ReaderActivity : Activity(), PdfView.Listener {
         get() = getSharedPreferences("ursa", MODE_PRIVATE).getBoolean("leftPie", false)
         set(v) { getSharedPreferences("ursa", MODE_PRIVATE).edit().putBoolean("leftPie", v).apply() }
 
+    /** The pie ticks like a rotary dial as the finger turns; off by default, for every file. */
+    private var ratchetPie: Boolean
+        get() = getSharedPreferences("ursa", MODE_PRIVATE).getBoolean("ratchet", false)
+        set(v) { getSharedPreferences("ursa", MODE_PRIVATE).edit().putBoolean("ratchet", v).apply() }
+
     /** A page held still for 250 ms. The chrome and any search slide away as the pie opens. */
     override fun onLongPress(x: Float, y: Float) {
         if (eng == null || pie != null) return
@@ -469,7 +475,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
         val list = PieMenu.Item(R.drawable.ic_bookmarks, "Show Bookmarks") { showBookmarks() }
         val right = listOf(add, invert, crop, lock, find, list)
         val items = if (leftPie) listOf(add) + right.drop(1).reversed() else right
-        val p = PieMenu(this, items, x, y) { root.removeView(it) }
+        val p = PieMenu(this, items, x, y, ratchetPie) { root.removeView(it) }
         pie = p
         root.addView(p, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
     }

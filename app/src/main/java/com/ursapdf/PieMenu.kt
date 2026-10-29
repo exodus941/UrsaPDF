@@ -26,7 +26,7 @@ import kotlin.math.sin
  */
 class PieMenu(
     private val a: Activity, private val items: List<Item>, x: Float, y: Float,
-    private val done: (PieMenu) -> Unit,
+    private val rotary: Boolean, private val done: (PieMenu) -> Unit,
 ) : View(a) {
 
     /** [enabled] false draws the segment dimmed and it cannot be picked. */
@@ -36,6 +36,11 @@ class PieMenu(
         const val TILT = 20f
         /** Degrees of turn per ratchet tick: four to a 60 degree segment. */
         const val NOTCH = 15.0
+        /**
+         * Without the ratchet: how long the finger must stay in a segment, or the centre,
+         * before it ticks. 62.5 ms; Android's timers count whole milliseconds.
+         */
+        const val DWELL = 63L
     }
 
     private val outerR = a.dp(120f)
@@ -55,11 +60,16 @@ class PieMenu(
     private val inner = RectF()
     private val onTheme: () -> Unit = { invalidate() }
     private val step get() = 360f / items.size
-    // A rotary dial's ratchet: turning the finger around the centre ticks every NOTCH
-    // degrees, so a faster turn ticks faster. Moving in or out, or in the centre, is silent.
+    // With [rotary], a rotary dial's ratchet: turning the finger around the centre ticks
+    // every NOTCH degrees, so a faster turn ticks faster; moving in or out, or in the
+    // centre, is silent. Without it, one tick for each segment, or the centre, the finger
+    // stays in for DWELL; one only passed through stays silent.
     private val ratchet = Ratchet()
     private var lastDeg = Double.NaN  // finger angle at the last move on the ring; NaN in the centre
     private var turned = 0.0          // degrees turned since entering the ring
+    private var region = -1           // under the finger: -1 the centre, else a segment, dimmed ones too
+    private var ticked = -1           // the region the last tick was for
+    private val settle = Runnable { if (!closing && region != ticked) { ticked = region; ratchet.tick() } }
     // Each segment's yellow, 0..1; it moves toward its target over 62.5 ms, linear.
     private val lit = FloatArray(items.size)
     private var litAt = 0L            // last fade step; 0 while every segment is settled
@@ -90,6 +100,7 @@ class PieMenu(
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
         growAnim.cancel()
+        removeCallbacks(settle)
         ratchet.release()
         Theme.listeners -= onTheme
     }
@@ -112,7 +123,9 @@ class PieMenu(
                 // 0 degrees at the top, rising clockwise.
                 val angle = (Math.toDegrees(atan2(dx.toDouble(), -dy.toDouble())) + 360) % 360
                 val r = if (d < innerR) -1 else (((angle + step / 2) % 360) / step).toInt().coerceAtMost(items.size - 1)
-                if (r < 0) lastDeg = Double.NaN else {
+                if (!rotary) {
+                    if (r != region) { region = r; removeCallbacks(settle); postDelayed(settle, DWELL) }
+                } else if (r < 0) lastDeg = Double.NaN else {
                     if (lastDeg.isNaN()) turned = 0.0 else {
                         val before = kotlin.math.floor(turned / NOTCH)
                         turned += ((angle - lastDeg + 540) % 360) - 180  // the short way round

@@ -152,7 +152,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
         top.addView(bookmarkBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)))
         timeoutBtn = iconButton(R.drawable.ic_timeout, "Screen Timeout") { timeoutMenu() }
         top.addView(timeoutBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)))
-        moreBtn = iconButton(R.drawable.ic_more, "More options") { moreMenu() }
+        moreBtn = iconButton(R.drawable.ic_adjust, "Options") { moreMenu() }
         top.addView(moreBtn, LinearLayout.LayoutParams(dpi(48), dpi(48)).apply { marginEnd = dpi(4) })
         ui.addView(top, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.TOP))
 

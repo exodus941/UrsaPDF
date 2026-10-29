@@ -39,7 +39,7 @@ class Ratchet {
         val pcm = ShortArray(n) { (x[it] * 0.25 * Short.MAX_VALUE).toInt().coerceIn(-32768, 32767).toShort() }
         track = try {
             AudioTrack.Builder()
-                .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
                 .setAudioFormat(AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT).setSampleRate(rate)
                     .setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())

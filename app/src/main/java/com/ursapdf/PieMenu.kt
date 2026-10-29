@@ -26,7 +26,7 @@ import kotlin.math.sin
  */
 class PieMenu(
     private val a: Activity, private val items: List<Item>, x: Float, y: Float,
-    private val rotary: Boolean, private val done: (PieMenu) -> Unit,
+    private val rotary: Boolean, private val leftHanded: Boolean, private val done: (PieMenu) -> Unit,
 ) : View(a) {
 
     /** [enabled] false draws the segment dimmed and it cannot be picked. */
@@ -122,15 +122,45 @@ class PieMenu(
         contentDescription = items.joinToString { it.name }
     }
 
+    // The hovered item's name, in the page pill's style: above the disc, else beside it on
+    // the side away from the thumb (left, or right when [leftHanded]), else below. A sibling
+    // view, so the disc's tilt does not skew it. Fades with the yellow, 62.5 ms.
+    private val name = a.label("", 13f, Theme.text(), bold = true).apply {
+        setPadding(a.dpi(16), a.dpi(8), a.dpi(16), a.dpi(8))
+        alpha = 0f
+    }
+
+    private fun showName() {
+        val it = items.getOrNull(sel)
+        if (it == null) { name.animate().alpha(0f).setDuration((62.5f * name.alpha).toLong()).setInterpolator(Motion.FADE).start(); return }
+        name.text = it.name
+        name.setTextColor(Theme.text())
+        name.background = a.pill(Theme.panel(), 14f)
+        name.measure(MeasureSpec.UNSPECIFIED, MeasureSpec.UNSPECIFIED)
+        val w = name.measuredWidth; val h = name.measuredHeight
+        val gap = a.dp(12f); val edge = a.dp(16f)
+        val (x, y) = when {
+            cy - outerR - gap - h >= edge -> cx - w / 2f to cy - outerR - gap - h
+            !leftHanded && cx - outerR - gap - w >= edge -> cx - outerR - gap - w to cy - h / 2f
+            leftHanded && cx + outerR + gap + w <= width - edge -> cx + outerR + gap to cy - h / 2f
+            else -> cx - w / 2f to cy + outerR + gap
+        }
+        name.translationX = x; name.translationY = y
+        name.animate().alpha(1f).setDuration((62.5f * (1 - name.alpha)).toLong()).setInterpolator(Motion.FADE).start()
+    }
+
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         Theme.listeners += onTheme
         growAnim.start()
         if (rotary) android.view.Choreographer.getInstance().postFrameCallback(frame)
+        (parent as? android.view.ViewGroup)?.addView(name, android.view.ViewGroup.LayoutParams(
+            android.view.ViewGroup.LayoutParams.WRAP_CONTENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT))
     }
 
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
+        (name.parent as? android.view.ViewGroup)?.removeView(name)
         growAnim.cancel()
         removeCallbacks(settle)
         removeCallbacks(dueTick)
@@ -176,6 +206,7 @@ class PieMenu(
                     sel = k
                     if (litAt == 0L) litAt = android.os.SystemClock.uptimeMillis()  // the fade starts now
                     invalidate()
+                    showName()
                 }
                 val f = min(1f, d / outerR) * TILT / d.coerceAtLeast(1f)
                 // Measured: these signs push the pressed side away from the viewer.
@@ -192,6 +223,8 @@ class PieMenu(
         if (closing) return
         closing = true
         animate().cancel()
+        name.animate().cancel()
+        name.animate().alpha(0f).setDuration((Motion.MS * name.alpha).toLong()).setInterpolator(Motion.FADE).start()
         animate().alpha(0f).rotationX(0f).rotationY(0f).setDuration((Motion.MS * alpha).toLong()).setInterpolator(Motion.FADE)
             .withEndAction { done(this) }.start()
         pick?.act?.invoke()

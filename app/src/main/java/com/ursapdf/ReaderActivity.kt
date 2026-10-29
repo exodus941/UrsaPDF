@@ -476,7 +476,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
         val list = PieMenu.Item(R.drawable.ic_bookmarks, "Show Bookmarks") { showBookmarks() }
         val right = listOf(add, invert, crop, lock, find, list)
         val items = if (leftPie) listOf(add) + right.drop(1).reversed() else right
-        val p = PieMenu(this, items, x, y, ratchetPie) { root.removeView(it) }
+        val p = PieMenu(this, items, x, y, ratchetPie, leftPie) { root.removeView(it) }
         pie = p
         root.addView(p, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
     }

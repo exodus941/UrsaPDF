@@ -68,7 +68,7 @@ class PieMenu(
         /** The shadow's soft outer part: darkness and blur (dp); it stays centred under the disc. */
         const val PENUMBRA_DARK = 0.35f
         const val PENUMBRA_BLUR = 14f
-        /** Its darker core: darkness, blur (dp), radius against the disc's, and how far (dp) it slides toward a press. */
+        /** Its darker core: darkness, blur (dp), radius against the disc's, and how far (dp) it slides away from a press. */
         const val UMBRA_DARK = 0.3f
         const val UMBRA_BLUR = 5f
         const val UMBRA_SIZE = 0.96f
@@ -161,7 +161,7 @@ class PieMenu(
     // The disc's shadow on the page, the same wherever the pie opens. Two layers, both
     // multiplied over the page (a grey; white leaves it as it is), both centred on the disc
     // at rest: a soft, wide penumbra that stays put, and a darker, tighter umbra that slides
-    // toward the pressed edge, up to UMBRA_SHIFT dp, so it shows just past the rim there, as
+    // away from the pressed edge, up to UMBRA_SHIFT dp, so it shows just past the raised rim, as
     // under a disc tipped down on that side. Each fades by easing its grey to white.
     private fun shadowDisc(dark: Float, blurDp: Float, r: Float): android.graphics.Bitmap {
         val b = a.dp(blurDp) * 2; val s = (2 * (r + b)).toInt()
@@ -202,7 +202,8 @@ class PieMenu(
             val dx = if (touched) fx - cx else 0f; val dy = if (touched) fy - cy else 0f
             val d = hypot(dx, dy)
             val s = if (d > 1f) a.dp(UMBRA_SHIFT) * min(1f, d / outerR) / d else 0f
-            place(umbra, cx + dx * s, cy + dy * s)
+            // Away from the press: the far edge rises, so its shadow falls out past that rim.
+            place(umbra, cx - dx * s, cy - dy * s)
         }
     }
     private fun alphaNow() = alpha

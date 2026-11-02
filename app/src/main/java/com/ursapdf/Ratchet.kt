@@ -40,8 +40,8 @@ class Ratchet {
         const val STEPS = 6
         /** Frames mixed per write: 1 ms. */
         const val CHUNK = 48
-        /** The open and close sound's loudness against a tick: 66%, set by the user. */
-        const val WHOOSH = 0.66
+        /** The open and close sound's loudness against a tick: 50%, set by the user. */
+        const val WHOOSH = 0.5
         /** Made once, about 23 ms for all seven; [warm] starts it off the main thread. */
         val shared by lazy { Ratchet() }
         fun warm() { Thread { shared }.start() }

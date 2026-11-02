@@ -40,8 +40,11 @@ class Ratchet {
         const val STEPS = 6
         /** Frames mixed per write: 1 ms. */
         const val CHUNK = 48
-        /** The open and close sound's loudness against a tick: 50%, set by the user. */
-        const val WHOOSH = 0.5
+        /** The open and close sound's loudness against a tick: 33%, set by the user. */
+        const val WHOOSH = 0.33
+        /** The open and close sound's length against 340 ms: 1.5 and 2, set by the user. */
+        const val OPEN_K = 1.5
+        const val CLOSE_K = 2.0
         /** Made once, about 23 ms for all seven; [warm] starts it off the main thread. */
         val shared by lazy { Ratchet() }
         fun warm() { Thread { shared }.start() }
@@ -68,10 +71,11 @@ class Ratchet {
     /**
      * "Air into Gust", as chosen on the demo page: white noise through a band-pass (Q 1.6)
      * sweeping 300 Hz to 3 kHz on open, back down on close, exponentially over 95% of its
-     * 340 ms. It swells to its peak in 120 ms and dies away by the end, both exponential.
+     * 340 ms, stretched by OPEN_K or CLOSE_K (510 and 680 ms, set by the user). It swells to its
+     * peak in a third of the 340 ms, stretched alike, and dies away by the end, both exponential.
      */
     private fun makeWhoosh(open: Boolean): FloatArray {
-        val dur = 0.34; val n = (rate * dur).toInt()
+        val k = if (open) OPEN_K else CLOSE_K; val dur = 0.34 * k; val rise = 0.12 * k; val n = (rate * dur).toInt()
         val lo = 300.0; val hi = 3000.0; val q = 1.6
         val rnd = java.util.Random(2)
         val out = FloatArray(n)
@@ -86,7 +90,7 @@ class Ratchet {
             val xin = rnd.nextDouble() * 2 - 1
             val y = (alpha * xin - alpha * x2 - a1 * y1 - a2 * y2) / a0
             x2 = x1; x1 = xin; y2 = y1; y1 = y
-            val g = if (t < 0.12) 0.0001 * Math.pow(0.6 / 0.0001, t / 0.12) else 0.6 * Math.pow(0.0001 / 0.6, (t - 0.12) / (dur - 0.12))
+            val g = if (t < rise) 0.0001 * Math.pow(0.6 / 0.0001, t / rise) else 0.6 * Math.pow(0.0001 / 0.6, (t - rise) / (dur - rise))
             out[i] = (y * g).toFloat()
         }
         return out
@@ -132,8 +136,8 @@ class Ratchet {
     private val main = android.os.Handler(android.os.Looper.getMainLooper())
     private val stopper = Runnable { stop() }
 
-    /** Closes the stream once a sound just started has played out (the close sound is 340 ms). */
-    fun stopLater() { main.removeCallbacks(stopper); main.postDelayed(stopper, 400) }
+    /** Closes the stream once a sound just started has played out (the close sound is 680 ms). */
+    fun stopLater() { main.removeCallbacks(stopper); main.postDelayed(stopper, 750) }
 
     /** The pie's open or close sound. */
     fun whoosh(open: Boolean) {

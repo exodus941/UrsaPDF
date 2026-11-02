@@ -414,7 +414,8 @@ class PdfView(ctx: Context) : View(ctx) {
 
     private var curlBottom = true      // the corner turned: bottom right, else top right
     private var lift = 0f              // the finger's vertical travel; the corner rises with it
-    private val shade = Paint()
+    // Multiplied over the page beneath (a user rule), so its strength is a grey: 33% darker at the bend, white beyond.
+    private val shade = Paint().apply { xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.MULTIPLY) }
     private val meshPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
     private val front = FloatArray((CURL_GRID + 1) * (CURL_GRID + 1) * 2)
     private val backV = FloatArray((CURL_GRID + 1) * (CURL_GRID + 1) * 2)
@@ -504,7 +505,7 @@ class PdfView(ctx: Context) : View(ctx) {
         val sh = context.dp(24f)
         c.save()
         c.clipRect(fitLeft(under), fitTop(under), fitLeft(under) + dw[under], fitTop(under) + dh[under])
-        shade.shader = android.graphics.LinearGradient(ex, ey, ex + nx * sh, ey + ny * sh, 0x54000000, 0, android.graphics.Shader.TileMode.CLAMP)  // 33% black
+        shade.shader = android.graphics.LinearGradient(ex, ey, ex + nx * sh, ey + ny * sh, 0xFFABABAB.toInt(), Color.WHITE, android.graphics.Shader.TileMode.CLAMP)  // 33% darker, to none
         // Only beyond the bend: a half-plane, drawn as a big rectangle turned to the axis.
         c.save()
         c.rotate(Math.toDegrees(kotlin.math.atan2(ny.toDouble(), nx.toDouble())).toFloat(), ex, ey)

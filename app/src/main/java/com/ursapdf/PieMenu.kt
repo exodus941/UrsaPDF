@@ -58,6 +58,11 @@ class PieMenu(
         /** The glow round the finger, in the centre too: its radius in dp and peak strength. */
         const val GLOW_DP = 56f
         const val GLOW_PEAK = 0.35f
+        /** The shadow: the light's height over the screen's middle, the disc's over the page (dp), its darkness and blur. */
+        const val SHADOW_LIGHT = 450f
+        const val SHADOW_PIN = 48f
+        const val SHADOW_DARK = 0.5f
+        const val SHADOW_BLUR = 14f
 
         /** 0 below the start, 1 at and past the top, linear between. */
         fun ramp(v: Double, start: Double, top: Double) = ((v - start) / (top - start)).coerceIn(0.0, 1.0)
@@ -137,7 +142,76 @@ class PieMenu(
     private val growAnim = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
         duration = Motion.MS
         interpolator = Motion.IN
-        addUpdateListener { grow = it.animatedValue as Float; invalidate() }
+        addUpdateListener { grow = it.animatedValue as Float; invalidate(); shade.invalidate() }
+    }
+
+    // The disc's shadow on the page, cast by one light SHADOW_LIGHT dp above the middle of
+    // the screen while the disc rests SHADOW_PIN dp above the page. A tilted disc and the
+    // page are two planes, so the light maps one onto the other exactly by a perspective
+    // transform: four rim points, lifted and tilted as the disc is, projected onto the page,
+    // place a ready-blurred round shadow. It falls away from the screen's middle, further
+    // toward the edges, and stretches with the tilt. Multiplied over the page, so its
+    // strength is a grey (white leaves the page as it is); it fades by easing that grey to white.
+    private val shadowBmp: android.graphics.Bitmap by lazy {
+        val b = a.dp(SHADOW_BLUR) * 2; val s = (2 * (outerR + b)).toInt()
+        android.graphics.Bitmap.createBitmap(s, s, android.graphics.Bitmap.Config.ARGB_8888).also { bm ->
+            val c = Canvas(bm)
+            c.drawColor(android.graphics.Color.WHITE)
+            val g = (255 * (1 - SHADOW_DARK)).toInt()
+            c.drawCircle(s / 2f, s / 2f, outerR, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.rgb(g, g, g)
+                maskFilter = android.graphics.BlurMaskFilter(a.dp(SHADOW_BLUR), android.graphics.BlurMaskFilter.Blur.NORMAL)
+            })
+        }
+    }
+    private val shadowPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG).apply {
+        xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.MULTIPLY)
+    }
+    private val shadowMap = android.graphics.Matrix()
+    private val shadowSrc = FloatArray(8)
+    private val shadowDst = FloatArray(8)
+    private val fadeM = android.graphics.ColorMatrix()
+
+    private val shade = object : View(a) {
+        override fun hasOverlappingRendering() = false
+        override fun onDraw(c: Canvas) {
+            val k = grow * alphaNow()
+            if (k <= 0f) return
+            val lx = width / 2f; val ly = height / 2f; val lz = a.dp(SHADOW_LIGHT); val pin = a.dp(SHADOW_PIN)
+            // The disc's tilt, as the view's rotation sets it: the pressed side dips by up to TILT.
+            val dx = (fx - cx).takeIf { touched } ?: 0f; val dy = (fy - cy).takeIf { touched } ?: 0f
+            val d = hypot(dx, dy)
+            val ang = Math.toRadians((min(1f, d / outerR) * TILT).toDouble())
+            val ux = if (d > 1f) dx / d else 0f; val uy = if (d > 1f) dy / d else 0f
+            val kx = -uy; val ky = ux; val co = cos(ang).toFloat(); val si = sin(ang).toFloat(); val t = 1 - co
+            val half = shadowBmp.width / 2f
+            val r = outerR * grow
+            for (i in 0 until 4) {
+                val px = if (i % 2 == 0) (if (i == 0) r else -r) else 0f
+                val py = if (i % 2 == 1) (if (i == 1) r else -r) else 0f
+                // Rodrigues' rotation about (kx, ky, 0).
+                val x = (t * kx * kx + co) * px + t * kx * ky * py
+                val y = t * kx * ky * px + (t * ky * ky + co) * py
+                val z = -ky * si * px + kx * si * py
+                val wx = cx + x; val wy = cy + y; val wz = pin + z
+                val f = lz / (lz - wz)
+                shadowDst[2 * i] = lx + (wx - lx) * f; shadowDst[2 * i + 1] = ly + (wy - ly) * f
+                shadowSrc[2 * i] = half + px / grow; shadowSrc[2 * i + 1] = half + py / grow
+            }
+            shadowMap.setPolyToPoly(shadowSrc, 0, shadowDst, 0, 4)
+            // Fading: the grey eases to white, which multiplies to nothing.
+            val s = k; val o = 255 * (1 - s)
+            fadeM.set(floatArrayOf(s, 0f, 0f, 0f, o, 0f, s, 0f, 0f, o, 0f, 0f, s, 0f, o, 0f, 0f, 0f, 1f, 0f))
+            shadowPaint.colorFilter = android.graphics.ColorMatrixColorFilter(fadeM)
+            c.drawBitmap(shadowBmp, shadowMap, shadowPaint)
+        }
+    }
+    private fun alphaNow() = alpha
+
+    /** The name pill and the shadow live beside the disc in its parent. */
+    private fun dropSiblings() {
+        (name.parent as? android.view.ViewGroup)?.removeView(name)
+        (shade.parent as? android.view.ViewGroup)?.removeView(shade)
     }
 
     init {
@@ -177,15 +251,22 @@ class PieMenu(
         Theme.listeners += onTheme
         growAnim.start()
         ratchet.start()
-        (parent as? android.view.ViewGroup)?.addView(name, android.view.ViewGroup.LayoutParams(
-            android.view.ViewGroup.LayoutParams.WRAP_CONTENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT))
+        ratchet.whoosh(true)
+        (parent as? android.view.ViewGroup)?.let { p ->
+            p.addView(name, android.view.ViewGroup.LayoutParams(
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT))
+            // Under the disc, untilted: the shadow lies on the page.
+            p.addView(shade, p.indexOfChild(this), android.view.ViewGroup.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT))
+        }
     }
 
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
-        (name.parent as? android.view.ViewGroup)?.removeView(name)
+        // Not removed here: this runs inside the parent's own removal of the disc.
+        (parent as? android.view.ViewGroup ?: name.parent as? android.view.ViewGroup)?.post { dropSiblings() }
         growAnim.cancel()
-        ratchet.stop()
+        ratchet.stopLater()  // the close sound plays on past the fade
         Theme.listeners -= onTheme
     }
 
@@ -237,6 +318,7 @@ class PieMenu(
                 // Measured: these signs push the pressed side away from the viewer.
                 rotationY = dx * f
                 rotationX = -dy * f
+                shade.invalidate()
             }
             MotionEvent.ACTION_UP -> close(items.getOrNull(sel))
             MotionEvent.ACTION_CANCEL -> close(null)
@@ -247,11 +329,13 @@ class PieMenu(
     fun close(pick: Item? = null) {
         if (closing) return
         closing = true
+        ratchet.whoosh(false)
         animate().cancel()
         name.animate().cancel()
         name.animate().alpha(0f).setDuration((Motion.MS * name.alpha).toLong()).setInterpolator(Motion.FADE).start()
         animate().alpha(0f).rotationX(0f).rotationY(0f).setDuration((Motion.MS * alpha).toLong()).setInterpolator(Motion.FADE)
-            .withEndAction { done(this) }.start()
+            .setUpdateListener { shade.invalidate() }
+            .withEndAction { dropSiblings(); done(this) }.start()
         pick?.act?.invoke()
     }
 

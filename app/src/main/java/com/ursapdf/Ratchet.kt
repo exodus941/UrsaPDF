@@ -40,6 +40,8 @@ class Ratchet {
         const val STEPS = 6
         /** Frames mixed per write: 1 ms. */
         const val CHUNK = 48
+        /** The open and close sound's loudness against a tick: 66%, set by the user. */
+        const val WHOOSH = 0.66
         /** Made once, about 23 ms for all seven; [warm] starts it off the main thread. */
         val shared by lazy { Ratchet() }
         fun warm() { Thread { shared }.start() }
@@ -49,7 +51,45 @@ class Ratchet {
         val raw = (0..STEPS).map { make(Math.pow(2.0, it / 12.0)) }
         // Same energy, not same RMS: a higher tick is shorter, and at equal RMS it measured softer.
         val ref = energy(raw[0])
-        sounds = raw.map { s -> val k = sqrt(ref / energy(s)).toFloat(); FloatArray(s.size) { s[it] * k } }
+        val ticks = raw.map { s -> val k = sqrt(ref / energy(s)).toFloat(); FloatArray(s.size) { s[it] * k } }
+        // The pie's open and close sound, at WHOOSH of the tick's loudness (RMS over its sounding part).
+        val target = loud(ticks[0]) * WHOOSH
+        val swish = listOf(makeWhoosh(true), makeWhoosh(false)).map { s -> val k = (target / loud(s)).toFloat(); FloatArray(s.size) { s[it] * k } }
+        sounds = ticks + swish
+    }
+
+    /** RMS over the samples that sound, as the demo page measured it. */
+    private fun loud(x: FloatArray): Double {
+        var e = 0.0; var k = 0
+        for (v in x) { e += v.toDouble() * v; if (kotlin.math.abs(v) > 1e-4f) k++ }
+        return sqrt(e / maxOf(1, k)).takeIf { it > 0 } ?: 1.0
+    }
+
+    /**
+     * "Air into Gust", as chosen on the demo page: white noise through a band-pass (Q 1.6)
+     * sweeping 300 Hz to 3 kHz on open, back down on close, exponentially over 95% of its
+     * 340 ms. It swells to its peak in 120 ms and dies away by the end, both exponential.
+     */
+    private fun makeWhoosh(open: Boolean): FloatArray {
+        val dur = 0.34; val n = (rate * dur).toInt()
+        val lo = 300.0; val hi = 3000.0; val q = 1.6
+        val rnd = java.util.Random(2)
+        val out = FloatArray(n)
+        var x1 = 0.0; var x2 = 0.0; var y1 = 0.0; var y2 = 0.0
+        for (i in 0 until n) {
+            val t = i.toDouble() / rate
+            val u = (t / (dur * 0.95)).coerceAtMost(1.0)
+            val f = if (open) lo * Math.pow(hi / lo, u) else hi * Math.pow(lo / hi, u)
+            val w = 2 * PI * f / rate
+            val alpha = sin(w) / (2 * q); val cw = cos(w)
+            val a0 = 1 + alpha; val a1 = -2 * cw; val a2 = 1 - alpha
+            val xin = rnd.nextDouble() * 2 - 1
+            val y = (alpha * xin - alpha * x2 - a1 * y1 - a2 * y2) / a0
+            x2 = x1; x1 = xin; y2 = y1; y1 = y
+            val g = if (t < 0.12) 0.0001 * Math.pow(0.6 / 0.0001, t / 0.12) else 0.6 * Math.pow(0.0001 / 0.6, (t - 0.12) / (dur - 0.12))
+            out[i] = (y * g).toFloat()
+        }
+        return out
     }
 
     private fun energy(x: FloatArray) = x.sumOf { it.toDouble() * it }.takeIf { it > 0 } ?: 1.0
@@ -89,8 +129,21 @@ class Ratchet {
         }
     }
 
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
+    private val stopper = Runnable { stop() }
+
+    /** Closes the stream once a sound just started has played out (the close sound is 340 ms). */
+    fun stopLater() { main.removeCallbacks(stopper); main.postDelayed(stopper, 400) }
+
+    /** The pie's open or close sound. */
+    fun whoosh(open: Boolean) {
+        if (!running) return
+        synchronized(voices) { voices += intArrayOf(STEPS + if (open) 1 else 2, 0, 1000) }
+    }
+
     /** Opens the stream; silence until a tick. */
     fun start() {
+        main.removeCallbacks(stopper)
         if (running) return
         val t = try {
             val min = AudioTrack.getMinBufferSize(rate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_FLOAT)
@@ -128,6 +181,7 @@ class Ratchet {
 
     /** Closes the stream. */
     fun stop() {
+        main.removeCallbacks(stopper)
         running = false
         thread?.join(100); thread = null
         track?.let { try { it.stop(); it.release() } catch (_: Exception) {} }

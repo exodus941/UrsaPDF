@@ -66,11 +66,11 @@ class PieMenu(
         /** The yellow selector's and the name pill's fade, in and out, linear: 125 ms. */
         const val SEL_MS = 125f
         /** The shadow's soft outer part: darkness and blur (dp); it stays centred under the disc. */
-        const val PENUMBRA_DARK = 0.35f
-        const val PENUMBRA_BLUR = 14f
+        const val PENUMBRA_DARK = 0.231f  // 66% of 0.35
+        const val PENUMBRA_BLUR = 42f    // the spread, three times 14
         /** Its darker core: darkness, blur (dp), radius against the disc's, and how far (dp) it slides away from a press. */
-        const val UMBRA_DARK = 0.3f
-        const val UMBRA_BLUR = 5f
+        const val UMBRA_DARK = 0.198f     // 66% of 0.3
+        const val UMBRA_BLUR = 15f       // three times 5
         const val UMBRA_SIZE = 0.96f
         const val UMBRA_SHIFT = 10f
 
@@ -163,18 +163,29 @@ class PieMenu(
     // at rest: a soft, wide penumbra that stays put, and a darker, tighter umbra that slides
     // away from the pressed edge, up to UMBRA_SHIFT dp, so it shows just past the raised rim, as
     // under a disc tipped down on that side. Each fades by easing its grey to white.
-    private fun shadowDisc(dark: Float, blurDp: Float, r: Float): android.graphics.Bitmap {
-        val b = a.dp(blurDp) * 2; val s = (2 * (r + b)).toInt()
+    // A round shadow [dark] at its fullest, out to a third of [spreadDp] inside the rim [r],
+    // then falling off by inverse square, 1 / (1 + (x / core)²) with the core a quarter of the
+    // fall, rescaled to reach nothing [spreadDp] beyond where it began.
+    private fun shadowDisc(dark: Float, spreadDp: Float, r: Float): android.graphics.Bitmap {
+        val sp = a.dp(spreadDp); val r0 = r - sp / 3; val big = r0 + sp
+        val s = (2 * big).toInt() + 2
+        val cols = IntArray(GLOW_STOPS + 2); val pos = FloatArray(GLOW_STOPS + 2)
+        val edge = 1f / (1f + 16f)                     // the inverse square at the far end, core 0.25
+        cols[0] = grey(dark); pos[0] = 0f
+        for (i in 0..GLOW_STOPS) {
+            val u = i / GLOW_STOPS.toFloat(); val q = u / 0.25f
+            cols[i + 1] = grey(dark * (1f / (1f + q * q) - edge) / (1f - edge))
+            pos[i + 1] = (r0 + sp * u) / big
+        }
         return android.graphics.Bitmap.createBitmap(s, s, android.graphics.Bitmap.Config.ARGB_8888).also { bm ->
             val c = Canvas(bm)
             c.drawColor(android.graphics.Color.WHITE)
-            val g = (255 * (1 - dark)).toInt()
-            c.drawCircle(s / 2f, s / 2f, r, Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = android.graphics.Color.rgb(g, g, g)
-                maskFilter = android.graphics.BlurMaskFilter(a.dp(blurDp), android.graphics.BlurMaskFilter.Blur.NORMAL)
+            c.drawCircle(s / 2f, s / 2f, big, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                shader = android.graphics.RadialGradient(s / 2f, s / 2f, big, cols, pos, android.graphics.Shader.TileMode.CLAMP)
             })
         }
     }
+    private fun grey(dark: Float): Int { val g = (255 * (1 - dark.coerceIn(0f, 1f))).toInt(); return android.graphics.Color.rgb(g, g, g) }
     private val penumbra by lazy { shadowDisc(PENUMBRA_DARK, PENUMBRA_BLUR, outerR) }
     private val umbra by lazy { shadowDisc(UMBRA_DARK, UMBRA_BLUR, outerR * UMBRA_SIZE) }
     private val shadowPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG).apply {

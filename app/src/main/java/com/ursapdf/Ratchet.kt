@@ -47,14 +47,14 @@ class Ratchet {
         const val LEAD_DB = 30.0
         /** The open and close sound's tail is this many times its first length, set by the user; its top is rolled off above SMOOTH_HZ. */
         const val TAIL = 2.0
-        const val SMOOTH_HZ = 700.0
+        const val SMOOTH_HZ = 1500.0
         /** The open and close sound's band sweeps between these, in Hz: low, a thrum, not a whip (user). */
-        const val SWEEP_LO = 150.0
-        const val SWEEP_HI = 500.0
+        const val SWEEP_LO = 200.0
+        const val SWEEP_HI = 1200.0
         /** The open and close sound's EQ and band width: airier and lighter, less mid, a hint of bass (user). */
         const val SUB_HZ = 70.0
         const val BASS_HZ = 220.0
-        const val BASS = 0.75
+        const val BASS = 0.375
         const val BAND_Q = 0.8
         /** Versions of the open and of the close sound, each from its own noise, played in turn. */
         const val VARIANTS = 3
@@ -94,7 +94,7 @@ class Ratchet {
 
     /**
      * "Air into Gust", as chosen on the demo page: white noise through a band-pass (Q BAND_Q, 0.8: wider, airier and less whistly than the demo's 1.6)
-     * sweeping SWEEP_LO to SWEEP_HI (150 to 500 Hz; the demo's 300 Hz to 3 kHz cracked like a whip) on open, back down on close, exponentially over 95% of its
+     * sweeping SWEEP_LO to SWEEP_HI (200 Hz to 1.2 kHz, between the demo's 300 Hz to 3 kHz, a whip, and 150 to 500 Hz, too bassy) on open, back down on close, exponentially over 95% of its
      * 340 ms, stretched by OPEN_K or CLOSE_K (510 and 680 ms, set by the user). It swells to its
      * peak in a third of the 340 ms, stretched alike, and dies away by the end, both exponential.
      */
@@ -130,8 +130,8 @@ class Ratchet {
             l2 = l1; l1 = lin; m2 = m1; m1 = b
             out[i] = ((y + b * BASS) * g).toFloat()
         }
-        // EQ: a high-pass at SUB_HZ (no sub-bass) and a low-pass at SMOOTH_HZ run twice, 24 dB
-        // an octave. Anything over a few hundred Hz cracked "like a whip" on a phone speaker.
+        // EQ: a high-pass at SUB_HZ (no sub-bass) and a low-pass at SMOOTH_HZ, 12 dB
+        // an octave: 3 kHz cracked "like a whip" on a phone speaker, 500 Hz and 24 dB was "all too bassy".
         fun pass(b0: Double, b1: Double, b2: Double, a0: Double, a1: Double, a2: Double) {
             var p1 = 0.0; var p2 = 0.0; var q1 = 0.0; var q2 = 0.0
             for (i in 0 until n) {
@@ -143,7 +143,7 @@ class Ratchet {
         }
         fun coef(hz: Double, q: Double) = (2 * PI * hz / rate).let { w -> Triple(sin(w) / (2 * q), cos(w), w) }
         coef(SUB_HZ, 0.707).let { (al, cw) -> pass((1 + cw) / 2, -(1 + cw), (1 + cw) / 2, 1 + al, -2 * cw, 1 - al) }
-        repeat(2) { coef(SMOOTH_HZ, 0.707).let { (al, cw) -> pass((1 - cw) / 2, 1 - cw, (1 - cw) / 2, 1 + al, -2 * cw, 1 - al) } }
+        repeat(1) { coef(SMOOTH_HZ, 0.707).let { (al, cw) -> pass((1 - cw) / 2, 1 - cw, (1 - cw) / 2, 1 + al, -2 * cw, 1 - al) } }
         // It felt late: its swell starts 76 dB down and is inaudible for most of the rise. Drop
         // what lies more than LEAD_DB under the peak, so it sounds at once, at the same speed.
         val quiet = 20 * kotlin.math.log10(0.0001 / 0.6)           // -75.6 dB

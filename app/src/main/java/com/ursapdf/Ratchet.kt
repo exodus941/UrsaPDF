@@ -45,6 +45,9 @@ class Ratchet {
         const val WHOOSH = 0.25
         /** The open and close sound starts this far (dB) under its peak; the quieter lead-in is cut. */
         const val LEAD_DB = 30.0
+        /** The open and close sound's tail is this many times its first length, set by the user; its top is rolled off above SMOOTH_HZ. */
+        const val TAIL = 2.0
+        const val SMOOTH_HZ = 1800.0
         /** The open and close sound's length against 340 ms: 1.5 and 2, set by the user. */
         const val OPEN_K = 1.5
         const val CLOSE_K = 2.0
@@ -60,7 +63,12 @@ class Ratchet {
         val ticks = raw.map { s -> val k = sqrt(ref / energy(s)).toFloat(); FloatArray(s.size) { s[it] * k } }
         // The pie's open and close sound, at WHOOSH of the tick's loudness (RMS over its sounding part).
         val target = loud(ticks[0]) * WHOOSH
-        val swish = listOf(makeWhoosh(true), makeWhoosh(false)).map { s -> val k = (target / loud(s)).toFloat(); FloatArray(s.size) { s[it] * k } }
+        // Measured over the length it had before the longer tail, so the tail does not raise the rest.
+        val swish = listOf(true, false).map { o ->
+            val (s, first) = makeWhoosh(o)
+            val k = (target / loud(s.copyOfRange(0, first.coerceIn(1, s.size)))).toFloat()
+            FloatArray(s.size) { s[it] * k }
+        }
         sounds = ticks + swish
         peaks = sounds.map { s -> s.maxOf { kotlin.math.abs(it) }.coerceAtLeast(1e-6f) }
     }
@@ -78,8 +86,12 @@ class Ratchet {
      * 340 ms, stretched by OPEN_K or CLOSE_K (510 and 680 ms, set by the user). It swells to its
      * peak in a third of the 340 ms, stretched alike, and dies away by the end, both exponential.
      */
-    private fun makeWhoosh(open: Boolean): FloatArray {
-        val k = if (open) OPEN_K else CLOSE_K; val dur = 0.34 * k; val rise = 0.12 * k; val n = (rate * dur).toInt()
+    /** The sound, and how many of its samples its length before the longer tail covers. */
+    private fun makeWhoosh(open: Boolean): Pair<FloatArray, Int> {
+        val k = if (open) OPEN_K else CLOSE_K; val dur = 0.34 * k; val rise = 0.12 * k
+        // The tail after the peak runs TAIL times as long; the sweep keeps its own pace and holds at its end.
+        val end = rise + (dur - rise) * TAIL
+        val n = (rate * end).toInt()
         val lo = 300.0; val hi = 3000.0; val q = 1.6
         val rnd = java.util.Random(2)
         val out = FloatArray(n)
@@ -94,14 +106,26 @@ class Ratchet {
             val xin = rnd.nextDouble() * 2 - 1
             val y = (alpha * xin - alpha * x2 - a1 * y1 - a2 * y2) / a0
             x2 = x1; x1 = xin; y2 = y1; y1 = y
-            val g = if (t < rise) 0.0001 * Math.pow(0.6 / 0.0001, t / rise) else 0.6 * Math.pow(0.0001 / 0.6, (t - rise) / (dur - rise))
+            val g = if (t < rise) 0.0001 * Math.pow(0.6 / 0.0001, t / rise) else 0.6 * Math.pow(0.0001 / 0.6, (t - rise) / (end - rise))
             out[i] = (y * g).toFloat()
+        }
+        // EQ: a gentle low-pass (Q 0.707) at SMOOTH_HZ rounds off the top of the sweep.
+        run {
+            val w = 2 * PI * SMOOTH_HZ / rate; val al = sin(w) / (2 * 0.707); val cw = cos(w)
+            val b0 = (1 - cw) / 2; val b1 = 1 - cw; val a0 = 1 + al; val a1 = -2 * cw; val a2 = 1 - al
+            var p1 = 0.0; var p2 = 0.0; var q1 = 0.0; var q2 = 0.0
+            for (i in 0 until n) {
+                val xin = out[i].toDouble()
+                val y = (b0 * xin + b1 * p1 + b0 * p2 - a1 * q1 - a2 * q2) / a0
+                p2 = p1; p1 = xin; q2 = q1; q1 = y
+                out[i] = y.toFloat()
+            }
         }
         // It felt late: its swell starts 76 dB down and is inaudible for most of the rise. Drop
         // what lies more than LEAD_DB under the peak, so it sounds at once, at the same speed.
         val quiet = 20 * kotlin.math.log10(0.0001 / 0.6)           // -75.6 dB
         val skip = (rate * rise * (1 - LEAD_DB / -quiet)).toInt()
-        return out.copyOfRange(skip, n)
+        return out.copyOfRange(skip, n) to ((rate * dur).toInt() - skip)
     }
 
     private fun energy(x: FloatArray) = x.sumOf { it.toDouble() * it }.takeIf { it > 0 } ?: 1.0
@@ -144,8 +168,8 @@ class Ratchet {
     private val main = android.os.Handler(android.os.Looper.getMainLooper())
     private val stopper = Runnable { stop() }
 
-    /** Closes the stream once a sound just started has played out (the close sound is 680 ms). */
-    fun stopLater() { main.removeCallbacks(stopper); main.postDelayed(stopper, 750) }
+    /** Closes the stream once a sound just started has played out (the close sound runs about 1 s). */
+    fun stopLater() { main.removeCallbacks(stopper); main.postDelayed(stopper, 1100) }
 
     /** The pie's open or close sound. */
     fun whoosh(open: Boolean) {

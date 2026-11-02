@@ -56,8 +56,11 @@ class PieMenu(
         /** The beam's eased fade, sampled at this many stops each side. */
         const val BEAM_STOPS = 8
         /** The glow round the finger, in the centre too: its radius in dp and peak strength. */
-        const val GLOW_DP = 112f
+        const val GLOW_DP = 144f
         const val GLOW_PEAK = 0.35f
+        /** The glow's inverse-square falloff: its core, as a share of the radius, and the stops it is drawn with. */
+        const val GLOW_CORE = 0.25f
+        const val GLOW_STOPS = 16
         /** The yellow selector's and the name pill's fade, in and out, linear: 125 ms. */
         const val SEL_MS = 125f
         /** The shadow: the light's height over the screen's middle, the disc's over the page (dp), its darkness and blur. */
@@ -116,8 +119,8 @@ class PieMenu(
     private var glow = 0f
     private var touched = false
     private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val glowCols = IntArray(BEAM_STOPS + 1)
-    private val glowPos = FloatArray(BEAM_STOPS + 1)
+    private val glowCols = IntArray(GLOW_STOPS + 1)
+    private val glowPos = FloatArray(GLOW_STOPS + 1)
     private val clip = Path()
     // The beam: a soft yellow spotlight on the ring at the finger's angle, not bound to the
     // segments. Screen-blended, so its strength is a colour, not an alpha; it fades in and
@@ -373,13 +376,17 @@ class PieMenu(
     private fun drawGlow(c: Canvas) {
         val light = Theme.light
         glowPaint.xfermode = if (light) multiply else screen
-        for (i in 0..BEAM_STOPS) {
-            val t = 1 - i / BEAM_STOPS.toFloat()      // 1 at the finger, 0 at the rim
-            val k = t * t * (3 - 2 * t) * GLOW_PEAK * glow
+        // Inverse square, as light from a point falls off: 1 / (1 + (d / GLOW_CORE)²), shifted
+        // and scaled so it is full at the finger and nothing at the rim.
+        val edge = 1f / (1f + (1f / GLOW_CORE) * (1f / GLOW_CORE))
+        for (i in 0..GLOW_STOPS) {
+            val u = i / GLOW_STOPS.toFloat()          // 0 at the finger, 1 at the rim
+            val q = u / GLOW_CORE
+            val k = ((1f / (1f + q * q) - edge) / (1f - edge)) * GLOW_PEAK * glow
             fun ch(v: Int) = if (light) (255 - (255 - v) * k).toInt() else (v * k).toInt()
             glowCols[i] = android.graphics.Color.rgb(
                 ch(android.graphics.Color.red(ACCENT)), ch(android.graphics.Color.green(ACCENT)), ch(android.graphics.Color.blue(ACCENT)))
-            glowPos[i] = i / BEAM_STOPS.toFloat()
+            glowPos[i] = u
         }
         val r = a.dp(GLOW_DP)
         glowPaint.shader = android.graphics.RadialGradient(fx, fy, r, glowCols, glowPos, android.graphics.Shader.TileMode.CLAMP)

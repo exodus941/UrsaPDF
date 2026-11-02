@@ -47,7 +47,9 @@ class Ratchet {
         const val LEAD_DB = 30.0
         /** The open and close sound's tail is this many times its first length, set by the user; its top is rolled off above SMOOTH_HZ. */
         const val TAIL = 2.0
-        const val SMOOTH_HZ = 1800.0
+        const val SMOOTH_HZ = 1200.0
+        /** Versions of the open and of the close sound, each from its own noise, played in turn. */
+        const val VARIANTS = 3
         /** The open and close sound's length against 340 ms: 1.5 and 2, set by the user. */
         const val OPEN_K = 1.5
         const val CLOSE_K = 2.0
@@ -64,8 +66,10 @@ class Ratchet {
         // The pie's open and close sound, at WHOOSH of the tick's loudness (RMS over its sounding part).
         val target = loud(ticks[0]) * WHOOSH
         // Measured over the length it had before the longer tail, so the tail does not raise the rest.
-        val swish = listOf(true, false).map { o ->
-            val (s, first) = makeWhoosh(o)
+        // VARIANTS of each, every one from its own noise, taken in turn: two copies of one noise
+        // overlapping (a close over the open's tail, or a quick re-open) comb-filtered into a flanger.
+        val swish = listOf(true, false).flatMap { o -> (0 until VARIANTS).map { o to it } }.map { (o, v) ->
+            val (s, first) = makeWhoosh(o, 10L + v + if (o) 0 else VARIANTS)
             val k = (target / loud(s.copyOfRange(0, first.coerceIn(1, s.size)))).toFloat()
             FloatArray(s.size) { s[it] * k }
         }
@@ -87,13 +91,13 @@ class Ratchet {
      * peak in a third of the 340 ms, stretched alike, and dies away by the end, both exponential.
      */
     /** The sound, and how many of its samples its length before the longer tail covers. */
-    private fun makeWhoosh(open: Boolean): Pair<FloatArray, Int> {
+    private fun makeWhoosh(open: Boolean, seed: Long): Pair<FloatArray, Int> {
         val k = if (open) OPEN_K else CLOSE_K; val dur = 0.34 * k; val rise = 0.12 * k
         // The tail after the peak runs TAIL times as long; the sweep keeps its own pace and holds at its end.
         val end = rise + (dur - rise) * TAIL
         val n = (rate * end).toInt()
         val lo = 300.0; val hi = 3000.0; val q = 1.6
-        val rnd = java.util.Random(2)
+        val rnd = java.util.Random(seed)
         val out = FloatArray(n)
         var x1 = 0.0; var x2 = 0.0; var y1 = 0.0; var y2 = 0.0
         for (i in 0 until n) {
@@ -109,8 +113,9 @@ class Ratchet {
             val g = if (t < rise) 0.0001 * Math.pow(0.6 / 0.0001, t / rise) else 0.6 * Math.pow(0.0001 / 0.6, (t - rise) / (end - rise))
             out[i] = (y * g).toFloat()
         }
-        // EQ: a gentle low-pass (Q 0.707) at SMOOTH_HZ rounds off the top of the sweep.
-        run {
+        // EQ: a low-pass (Q 0.707) at SMOOTH_HZ, run twice for 24 dB an octave; once, at 12 dB,
+        // left the top of the 3 kHz sweep audible.
+        repeat(2) {
             val w = 2 * PI * SMOOTH_HZ / rate; val al = sin(w) / (2 * 0.707); val cw = cos(w)
             val b0 = (1 - cw) / 2; val b1 = 1 - cw; val a0 = 1 + al; val a1 = -2 * cw; val a2 = 1 - al
             var p1 = 0.0; var p2 = 0.0; var q1 = 0.0; var q2 = 0.0
@@ -165,6 +170,8 @@ class Ratchet {
         }
     }
 
+    private var nextOpen = 0
+    private var nextClose = 0
     private val main = android.os.Handler(android.os.Looper.getMainLooper())
     private val stopper = Runnable { stop() }
 
@@ -174,7 +181,8 @@ class Ratchet {
     /** The pie's open or close sound. */
     fun whoosh(open: Boolean) {
         if (!running) return
-        synchronized(voices) { voices += intArrayOf(STEPS + if (open) 1 else 2, 0, 1000) }
+        val v = if (open) { nextOpen = (nextOpen + 1) % VARIANTS; nextOpen } else { nextClose = (nextClose + 1) % VARIANTS; VARIANTS + nextClose }
+        synchronized(voices) { voices += intArrayOf(STEPS + 1 + v, 0, 1000) }
     }
 
     /** Opens the stream; silence until a tick. */

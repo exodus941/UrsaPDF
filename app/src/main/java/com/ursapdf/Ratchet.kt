@@ -42,7 +42,7 @@ class Ratchet {
         /** Frames mixed per write: 1 ms. */
         const val CHUNK = 48
         /** The open and close sound's loudness against a tick: 12.5%, set by the user. */
-        const val WHOOSH = 0.125
+        const val WHOOSH = 0.0825   // 66% of 0.125
         /** The open and close sound starts this far (dB) under its peak; the quieter lead-in is cut. */
         const val LEAD_DB = 30.0
         /** The open and close sound's tail is this many times its first length, set by the user; its top is rolled off above SMOOTH_HZ. */

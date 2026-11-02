@@ -60,6 +60,8 @@ class PieMenu(
         /** The glow round the finger, in the centre too: its radius in dp and peak strength. */
         const val GLOW_DP = 144f
         const val GLOW_PEAK = 0.35f
+        /** The glow's boost while the finger is in the centre, where no beam adds to it. */
+        const val GLOW_CENTRE = 1.5f
         /** The glow's inverse-square falloff: its core, as a share of the radius, and the stops it is drawn with. */
         const val GLOW_CORE = 0.25f
         const val GLOW_STOPS = 16
@@ -72,7 +74,8 @@ class PieMenu(
         const val UMBRA_DARK = 0.3f
         const val UMBRA_BLUR = 40f
         const val UMBRA_SIZE = 0.96f
-        const val UMBRA_SHIFT = 10f
+        const val UMBRA_SHIFT = 24f
+        const val PENUMBRA_SHIFT = 32f
 
         /** 0 below the start, 1 at and past the top, linear between. */
         fun ramp(v: Double, start: Double, top: Double) = ((v - start) / (top - start)).coerceIn(0.0, 1.0)
@@ -136,6 +139,7 @@ class PieMenu(
     private var beamDeg = 0f
     private var beam = 0f
     private var onRing = false
+    private var boost = 1f      // GLOW_CENTRE in the centre, 1 on the ring, eased as the beam
     private val screen = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SCREEN)
     private val multiply = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.MULTIPLY)
     private val beamPaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -160,8 +164,8 @@ class PieMenu(
 
     // The disc's shadow on the page, the same wherever the pie opens. Two layers, both
     // multiplied over the page (a grey; white leaves it as it is), both centred on the disc
-    // at rest: a soft, wide penumbra that stays put, and a darker, tighter umbra that slides
-    // away from the pressed edge, up to UMBRA_SHIFT dp, so it shows just past the raised rim, as
+    // at rest: a soft, wide penumbra and a darker, tighter umbra, both sliding away from the
+    // pressed edge, up to PENUMBRA_SHIFT and UMBRA_SHIFT dp, so they show past the raised rim, as
     // under a disc tipped down on that side. Each fades by easing its grey to white.
     // A round shadow [dark] at its fullest out to the rim [r] (C, chosen on the demo page),
     // then falling off by inverse square, 1 / (1 + (x / core)²) with the core half of the
@@ -209,12 +213,14 @@ class PieMenu(
                 shadowMap.postTranslate(x, y)
                 c.drawBitmap(bm, shadowMap, shadowPaint)
             }
-            place(penumbra, cx, cy)
             val dx = if (touched) fx - cx else 0f; val dy = if (touched) fy - cy else 0f
             val d = hypot(dx, dy)
-            val s = if (d > 1f) a.dp(UMBRA_SHIFT) * min(1f, d / outerR) / d else 0f
+            val t = if (d > 1f) min(1f, d / outerR) / d else 0f
             // Away from the press: the far edge rises, so its shadow falls out past that rim.
-            place(umbra, cx - dx * s, cy - dy * s)
+            val ps = a.dp(PENUMBRA_SHIFT) * t
+            place(penumbra, cx - dx * ps, cy - dy * ps)
+            val us = a.dp(UMBRA_SHIFT) * t
+            place(umbra, cx - dx * us, cy - dy * us)
         }
     }
     private fun alphaNow() = alpha
@@ -392,8 +398,8 @@ class PieMenu(
         for (i in 0..GLOW_STOPS) {
             val u = i / GLOW_STOPS.toFloat()          // 0 at the finger, 1 at the rim
             val q = u / GLOW_CORE
-            val k = ((1f / (1f + q * q) - edge) / (1f - edge)) * GLOW_PEAK * glow
-            fun ch(v: Int) = if (light) (255 - (255 - v) * k).toInt() else (v * k).toInt()
+            val k = ((1f / (1f + q * q) - edge) / (1f - edge)) * GLOW_PEAK * glow * boost
+            fun ch(v: Int) = (if (light) (255 - (255 - v) * k).toInt() else (v * k).toInt()).coerceIn(0, 255)
             glowCols[i] = android.graphics.Color.rgb(
                 ch(android.graphics.Color.red(ACCENT)), ch(android.graphics.Color.green(ACCENT)), ch(android.graphics.Color.blue(ACCENT)))
             glowPos[i] = u
@@ -428,6 +434,10 @@ class PieMenu(
         val beamWant = if (onRing) 1f else 0f
         beam = if (beam < beamWant) minOf(beamWant, beam + dt) else maxOf(beamWant, beam - dt)
         if (beam != beamWant) moving = true
+        val boostWant = if (onRing) 1f else GLOW_CENTRE
+        val bStep = dt * (GLOW_CENTRE - 1f)
+        boost = if (boost < boostWant) minOf(boostWant, boost + bStep) else maxOf(boostWant, boost - bStep)
+        if (boost != boostWant) moving = true
         if (touched && glow < 1f) { glow = minOf(1f, glow + dt); moving = true }
         if (moving) postInvalidateOnAnimation() else litAt = 0L
         // A lit segment: a ring sector, centred on its angle.

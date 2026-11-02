@@ -48,6 +48,14 @@ class PdfView(ctx: Context) : View(ctx) {
         const val BASE_MAX_PIXELS = 6_000_000f
         const val TURN_MS = 250L
         const val DOUBLE_TAP_ZOOM = 2.5f
+        /** Page Turn: the release spring's rate (per second) and how long it runs. */
+        const val CURL_OMEGA = 16.0
+        const val CURL_MS = 600L
+        /** Page Turn: mesh cells across and down the page, and the roll's radius as a share of its width. */
+        const val CURL_GRID = 40
+        const val CURL_RADIUS = 0.22f
+        /** Page Turn: the bend at its darkest, edge on to the viewer. */
+        const val CURL_DIM = 0.82f
     }
 
     private enum class Drag { NONE, TURN, VERTICAL, PAN }
@@ -102,6 +110,28 @@ class PdfView(ctx: Context) : View(ctx) {
 
     private val n get() = eng?.pageCount ?: 0
 
+    /**
+     * Continuous Mode: every page fitted to the width, stacked top to bottom [stackGap]
+     * apart, scrolled and flung freely. Zoom 1 is the page width and the least there is;
+     * sideways swipes no longer turn. [sy] then scrolls the whole stack.
+     */
+    var continuous = false
+        set(v) {
+            if (v == field) return
+            val p = if (fit.isNotEmpty()) position() else null
+            field = v
+            turnAnim?.cancel(); scroller.forceFinished(true); shift = 0f
+            if (p != null) pending = floatArrayOf(p[0], p[1], 0f, if (locked) lockZoom else 1f)
+            laidW = 0
+            relayout()
+        }
+    private var pos = FloatArray(0)     // continuous: top of each page in the stack at zoom 1
+    private var stackH = 0f             // continuous: the whole stack's height at zoom 1
+    private val stackGap = ctx.dp(8f)
+
+    /** Page Turn: a swipe at fit curls the page over like a book's, instead of sliding it. */
+    var pageTurn = false
+
     fun setDocument(e: PdfEngine, page: Int, y: Float, x: Float, z: Float) {
         eng = e
         e.listeners += onRendered
@@ -123,13 +153,20 @@ class PdfView(ctx: Context) : View(ctx) {
     }
 
     /** Where the current page sits on screen. */
-    fun pageRect() = RectF(left() + shift, top(), left() + shift + pageW(), top() + pageH())
+    fun pageRect() = RectF(left() + shift, pageY(currentPage), left() + shift + pageW(), pageY(currentPage) + pageH())
 
-    /** page, pan y fraction, pan x fraction. */
+    /** page, pan y fraction, pan x fraction. Continuous: y is how far down the page the screen's top is. */
     fun position(): FloatArray {
         val w = pageW(); val h = pageH()
+        if (continuous && pos.isNotEmpty()) {
+            val f = ((sy / zoom - pos[currentPage]) / dh[currentPage]).coerceIn(0f, 1f)
+            return floatArrayOf(currentPage.toFloat(), f, if (w > width) sx / w else 0f)
+        }
         return floatArrayOf(currentPage.toFloat(), if (h > height) sy / h else 0f, if (w > width) sx / w else 0f)
     }
+
+    /** Screen y of page [i]'s top: continuous, its place in the stack; else the current page's. */
+    private fun pageY(i: Int) = if (continuous && pos.isNotEmpty()) top() + pos[i] * zoom else top()
 
     override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
         // A swipe started at a side edge would be taken as the system Back gesture.
@@ -164,17 +201,21 @@ class PdfView(ctx: Context) : View(ctx) {
             for (i in 0 until n) {
                 val cw = e.pw[i] * c.width()
                 val ch = e.ph[i] * c.height()
-                val s = min(w / cw, h / ch)
+                val s = if (continuous) w / cw else min(w / cw, h / ch)
                 fit[i] = s; dw[i] = cw * s; dh[i] = ch * s
                 baseF[i] = min(1f, sqrt(BASE_MAX_PIXELS / (dw[i] * dh[i])))
             }
+            pos = FloatArray(n)
+            var y = 0f
+            for (i in 0 until n) { pos[i] = y; y += dh[i] + stackGap }
+            stackH = (y - stackGap).coerceAtLeast(0f)
             laidW = w; laidH = h
         }
         pending?.let { p ->
             pending = null
             currentPage = p[0].toInt().coerceIn(0, n - 1)
             zoom = p[3].coerceIn(1f, MAX_ZOOM)
-            sy = p[1] * pageH()
+            sy = if (continuous) (pos[currentPage] + p[1] * dh[currentPage]) * zoom else p[1] * pageH()
             sx = p[2] * pageW()
             shift = 0f
             listener?.onPageChanged(currentPage)
@@ -202,7 +243,17 @@ class PdfView(ctx: Context) : View(ctx) {
         val w = pageW(); val h = pageH()
         sx = if (w <= width) 0f else sx.coerceIn(0f, w - width)
         val band = height - bandTop - bandBottom
-        sy = if (h <= band) -(bandTop + (band - h) / 2) else sy.coerceIn(-bandTop, h - height + bandBottom)
+        val all = if (continuous) stackH * zoom else h
+        sy = if (all <= band) -(bandTop + (band - all) / 2) else sy.coerceIn(-bandTop, all - height + bandBottom)
+    }
+
+    /** Continuous: the page under the middle of the screen is the current one. */
+    private fun track() {
+        if (!continuous || pos.isEmpty()) return
+        val y = (sy + height / 2f) / zoom
+        var i = 0
+        while (i + 1 < n && pos[i + 1] - stackGap / 2 <= y) i++
+        if (i != currentPage) { currentPage = i; listener?.onPageChanged(i) }
     }
 
     private fun left() = pageW().let { if (it < width) (width - it) / 2 else -sx }
@@ -210,6 +261,7 @@ class PdfView(ctx: Context) : View(ctx) {
 
     private fun changed() {
         clamp()
+        track()
         invalidate()
     }
 
@@ -278,6 +330,14 @@ class PdfView(ctx: Context) : View(ctx) {
 
     /** [turned]: the page moved under a swipe, not a jump from the strip. */
     private fun setPage(p: Int, turned: Boolean = false) {
+        if (continuous) {
+            // Scroll the page's top to the screen's top; the zoom and sideways pan stay.
+            scroller.forceFinished(true)
+            sy = pos[p] * zoom
+            if (p != currentPage) { currentPage = p; listener?.onPageChanged(p) }
+            clamp(); invalidate()  // not changed(): the page asked for stays current
+            return
+        }
         shift = 0f; zoom = if (locked) lockZoom.coerceIn(1f, MAX_ZOOM) else 1f; sx = 0f; sy = 0f
         scroller.forceFinished(true)
         if (p != currentPage) {
@@ -309,10 +369,23 @@ class PdfView(ctx: Context) : View(ctx) {
             else -> 0f
         }
         val ms = (TURN_MS * abs(target - shift) / w).toLong().coerceIn(120L, TURN_MS)
-        turnAnim = ValueAnimator.ofFloat(shift, target).apply {
-            duration = ms
-            interpolator = DecelerateInterpolator()
-            addUpdateListener { shift = it.animatedValue as Float; invalidate() }
+        val curl = curling()
+        // A curl lets go like a sheet of paper: it carries the finger's speed and settles
+        // on a critically damped spring, no bounce. A slide keeps its ease-out.
+        val x0 = shift - target; val v0 = v; val lift0 = lift
+        turnAnim = (if (curl) ValueAnimator.ofFloat(0f, 1f) else ValueAnimator.ofFloat(shift, target)).apply {
+            duration = if (curl) CURL_MS else ms
+            interpolator = if (curl) android.view.animation.LinearInterpolator() else DecelerateInterpolator()
+            addUpdateListener {
+                if (curl) {
+                    val t = it.animatedFraction * CURL_MS / 1000.0
+                    var x = ((x0 + (v0 + CURL_OMEGA * x0) * t) * kotlin.math.exp(-CURL_OMEGA * t)).toFloat()
+                    if (x * x0 < 0) x = 0f  // never past the target: no curl the other way
+                    shift = target + x
+                    lift = if (x0 == 0f) 0f else lift0 * abs(x / x0).coerceAtMost(1f)
+                } else shift = it.animatedValue as Float
+                invalidate()
+            }
             addListener(object : android.animation.AnimatorListenerAdapter() {
                 private var cancelled = false
                 override fun onAnimationCancel(a: android.animation.Animator) { cancelled = true }
@@ -327,6 +400,120 @@ class PdfView(ctx: Context) : View(ctx) {
             })
             start()
         }
+    }
+
+    // ---- page curl ----
+    // The top page rolls round a cylinder lying across it, as paper does: flat up to the
+    // cylinder's axis, then bending over it, and past half a turn showing its back, which
+    // carries on flat once the roll is complete. The cylinder sits so that the page's
+    // corner lands under the finger. The page is drawn as a mesh, each point placed by
+    // that roll, so the whole sheet bends rather than folding along a crease; the back is
+    // the page faint under paper colour, and the bend is shaded by how far it faces away.
+    // Turning forward lifts the current page off the next; turning back lays the previous
+    // page down over the current one.
+
+    private var curlBottom = true      // the corner turned: bottom right, else top right
+    private var lift = 0f              // the finger's vertical travel; the corner rises with it
+    private val shade = Paint()
+    private val meshPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
+    private val front = FloatArray((CURL_GRID + 1) * (CURL_GRID + 1) * 2)
+    private val backV = FloatArray((CURL_GRID + 1) * (CURL_GRID + 1) * 2)
+    private val frontC = IntArray((CURL_GRID + 1) * (CURL_GRID + 1))
+    private val backC = IntArray((CURL_GRID + 1) * (CURL_GRID + 1))
+    private var backBmp: android.graphics.Bitmap? = null
+    private var backOf: android.graphics.Bitmap? = null
+
+    private fun curling() = pageTurn && shift != 0f && zoom <= 1.01f &&
+        ((shift < 0 && currentPage + 1 < n) || (shift > 0 && currentPage > 0))
+
+    /** The page's back: its print at half size, faint under paper colour. Made once per bitmap. */
+    private fun backOf(b: android.graphics.Bitmap): android.graphics.Bitmap {
+        if (backOf === b) backBmp?.let { return it }
+        backBmp?.recycle()
+        val s = android.graphics.Bitmap.createScaledBitmap(b, (b.width / 2).coerceAtLeast(1), (b.height / 2).coerceAtLeast(1), true)
+        val m = if (s.isMutable) s else s.copy(android.graphics.Bitmap.Config.ARGB_8888, true).also { if (it !== s) s.recycle() }
+        Canvas(m).drawColor(0xD9FFFFFF.toInt())
+        backBmp = m; backOf = b
+        return m
+    }
+
+    private fun grey(k: Float): Int { val g = (255 * k.coerceIn(0f, 1f)).toInt(); return Color.rgb(g, g, g) }
+
+    private fun drawCurl(c: Canvas, e: PdfEngine, want: MutableList<Req>) {
+        val fwd = shift < 0
+        val top = if (fwd) currentPage else currentPage - 1
+        val under = if (fwd) currentPage + 1 else currentPage
+        val step = width + gap
+        // How far over the top page is: 0 lying flat, 1 turned all the way.
+        val p = (if (fwd) -shift / step else 1 - shift / step).coerceIn(0f, 1f)
+        drawPage(c, e, under, fitLeft(under), fitTop(under), 1f, want, null)
+        drawHits(c, e, under, fitLeft(under), fitTop(under), 1f)
+        if (p >= 1f) return
+        val l = fitLeft(top); val t = fitTop(top); val w = dw[top]; val h = dh[top]
+        val bmp = e.base.get(PdfEngine.key(PdfEngine.BASE, top)) ?: e.thumbs.get(PdfEngine.key(PdfEngine.THUMB, top))
+        if (e.needs(PdfEngine.key(PdfEngine.BASE, top))) want += baseReq(e, top)
+        if (bmp == null) return
+        val cx = l + w; val cy = if (curlBottom) t + h else t
+        // The corner swings from where it lies to its mirror past the spine at the left edge;
+        // the finger's vertical travel lifts it most halfway over.
+        var tx = cx - p * 2 * w
+        var ty = cy + lift * kotlin.math.sin(Math.PI * p).toFloat()
+        // Paper does not stretch: the corner stays within the page's width of the spine.
+        val sdx = tx - l; val sdy = ty - cy
+        val sd = kotlin.math.hypot(sdx, sdy)
+        if (sd > w) { tx = l + sdx * w / sd; ty = cy + sdy * w / sd }
+        var nx = cx - tx; var ny = cy - ty
+        val len = kotlin.math.hypot(nx, ny)
+        if (len < 0.5f) { drawPage(c, e, top, l, t, 1f, want, null); drawHits(c, e, top, l, t, 1f); return }
+        nx /= len; ny /= len
+        // The roll grows from nothing as the page starts over, so a resting page is flat.
+        val r = w * CURL_RADIUS * (p * 4).coerceAtMost(1f)
+        val pr = (Math.PI * r).toFloat()
+        // The corner lies flat past the roll, under the finger: it is dc beyond the axis.
+        val dc = (len + pr) / 2
+        val ax = cx - nx * dc; val ay = cy - ny * dc
+        var k = 0
+        for (j in 0..CURL_GRID) for (i in 0..CURL_GRID) {
+            val x = l + w * i / CURL_GRID; val y = t + h * j / CURL_GRID
+            val d = (x - ax) * nx + (y - ay) * ny
+            val q: Float; val lit: Float
+            when {
+                d <= 0f -> { q = d; lit = 1f }
+                d < pr -> {
+                    val a = d / r
+                    q = r * kotlin.math.sin(a)
+                    // Facing the viewer at 0 and pi, edge on at pi/2.
+                    lit = CURL_DIM + (1 - CURL_DIM) * kotlin.math.abs(kotlin.math.cos(a))
+                }
+                else -> { q = -(d - pr); lit = 1f }
+            }
+            val px = x + (q - d) * nx; val py = y + (q - d) * ny
+            // The front holds the points not yet past the top of the roll; the back the rest.
+            val half = pr / 2
+            val df = minOf(d, half); val qf = if (df <= 0f) df else r * kotlin.math.sin(df / r)
+            front[2 * k] = x + (qf - d) * nx; front[2 * k + 1] = y + (qf - d) * ny
+            val db = maxOf(d, half); val qb = if (db < pr) r * kotlin.math.sin(db / r) else -(db - pr)
+            backV[2 * k] = x + (qb - d) * nx; backV[2 * k + 1] = y + (qb - d) * ny
+            frontC[k] = grey(if (d <= half) lit else CURL_DIM)
+            backC[k] = grey(if (d >= half) lit else CURL_DIM)
+            if (d <= half) { front[2 * k] = px; front[2 * k + 1] = py } else { backV[2 * k] = px; backV[2 * k + 1] = py }
+            k++
+        }
+        // The roll's shadow on the page beneath, along the far side of the bend.
+        val ex = ax + nx * r; val ey = ay + ny * r
+        val sh = context.dp(12f)
+        c.save()
+        c.clipRect(fitLeft(under), fitTop(under), fitLeft(under) + dw[under], fitTop(under) + dh[under])
+        shade.shader = android.graphics.LinearGradient(ex, ey, ex + nx * sh, ey + ny * sh, 0x26000000, 0, android.graphics.Shader.TileMode.CLAMP)
+        // Only beyond the bend: a half-plane, drawn as a big rectangle turned to the axis.
+        c.save()
+        c.rotate(Math.toDegrees(kotlin.math.atan2(ny.toDouble(), nx.toDouble())).toFloat(), ex, ey)
+        c.drawRect(ex, ey - 4 * (width + height), ex + 4 * (width + height), ey + 4 * (width + height), shade)
+        c.restore()
+        c.restore()
+        meshPaint.colorFilter = e.filter
+        c.drawBitmapMesh(bmp, CURL_GRID, CURL_GRID, front, 0, frontC, 0, meshPaint)
+        c.drawBitmapMesh(backOf(bmp), CURL_GRID, CURL_GRID, backV, 0, backC, 0, meshPaint)
     }
 
     /** Finger moves the page; past the first or last page it moves at a third of the speed. */
@@ -385,8 +572,10 @@ class PdfView(ctx: Context) : View(ctx) {
                         else -> 0
                     }
                 }
+                if (continuous) edgeDir = 0
+                if (drag == Drag.NONE && !continuous) { curlBottom = (e1?.y ?: e2.y) > height / 2f; lift = 0f }
                 drag = when {
-                    zoom > 1.01f -> Drag.PAN
+                    zoom > 1.01f || continuous -> Drag.PAN
                     // Sideways wins up to 45 degrees, as in 1.2.0.
                     abs(tx) >= abs(ty) -> Drag.TURN
                     else -> Drag.VERTICAL
@@ -394,7 +583,7 @@ class PdfView(ctx: Context) : View(ctx) {
             }
             when (drag) {
                 Drag.PAN -> { sx += dx; sy += dy; changed() }
-                Drag.TURN -> dragTurn(dx)
+                Drag.TURN -> { if (e1 != null) lift = e2.y - e1.y; dragTurn(dx) }
                 Drag.VERTICAL -> vDist -= dy
                 Drag.NONE -> {}
             }
@@ -410,9 +599,11 @@ class PdfView(ctx: Context) : View(ctx) {
                 // A fling from the edge turns one page.
                 Drag.PAN -> if (edgeDir != 0 && abs(vx) > abs(vy) && abs(vx) > flingMin && (vx < 0) == (edgeDir > 0)) edgeTurn(edgeDir) else {
                     val maxX = max(0f, pageW() - width).toInt()
-                    val maxY = max(0f, pageH() - height).toInt()
-                    val (fx, fy) = snapFlick(vx, vy)
-                    scroller.fling(sx.toInt(), sy.toInt(), -fx.toInt(), -fy.toInt(), 0, maxX, 0, maxY)
+                    val minY = if (continuous) (-bandTop).toInt() else 0
+                    val maxY = max(0f, if (continuous) stackH * zoom - height + bandBottom else pageH() - height).toInt()
+                    // At the page width a continuous flick has nowhere to go but up or down.
+                    val (fx, fy) = if (continuous && zoom <= 1.01f) 0f to vy else snapFlick(vx, vy)
+                    scroller.fling(sx.toInt(), sy.toInt(), -fx.toInt(), -fy.toInt(), 0, maxX, minY, maxY)
                     postInvalidateOnAnimation()
                 }
                 Drag.NONE -> flung = false
@@ -475,7 +666,7 @@ class PdfView(ctx: Context) : View(ctx) {
 
         private fun tap(e: MotionEvent) {
             if (drag != Drag.NONE || shift != 0f) return
-            if (formMode) fieldAt(e.x, e.y)?.let { listener?.onFieldTap(currentPage, it); return }
+            if (formMode) fieldAt(e.x, e.y)?.let { listener?.onFieldTap(if (continuous) pageAt(e.y) else currentPage, it); return }
             listener?.onTap(e.x, e.y)
         }
     // No long-press action exists, and a detected long press drops every later move:
@@ -512,6 +703,8 @@ class PdfView(ctx: Context) : View(ctx) {
      * zoom, then back to whole page. A page that already fills both skips the middle step.
      */
     private fun doubleTap(fx: Float, fy: Float) {
+        // Continuous: the page width already fills the screen's width; in, then back.
+        if (continuous) { if (zoom < 1.01f) zoomInAt(fx, fy, DOUBLE_TAP_ZOOM) else zoomToFit(fx, fy); return }
         val side = sideFitZoom()
         val close = max(DOUBLE_TAP_ZOOM, side * 1.5f).coerceAtMost(MAX_ZOOM)
         when {
@@ -654,12 +847,26 @@ class PdfView(ctx: Context) : View(ctx) {
         val tiles = ArrayList<Req>()
         val cur = currentPage
 
-        drawPage(canvas, e, cur, left() + shift, top(), zoom, want, tiles)
-        drawHits(canvas, e, cur, left() + shift, top(), zoom)
-        drawFields(canvas, e, cur, left() + shift, top(), zoom)
-        val step = width + gap
-        if (shift < 0 && cur + 1 < n) { drawPage(canvas, e, cur + 1, fitLeft(cur + 1) + shift + step, fitTop(cur + 1), 1f, want, null); drawHits(canvas, e, cur + 1, fitLeft(cur + 1) + shift + step, fitTop(cur + 1), 1f) }
-        if (shift > 0 && cur > 0) { drawPage(canvas, e, cur - 1, fitLeft(cur - 1) + shift - step, fitTop(cur - 1), 1f, want, null); drawHits(canvas, e, cur - 1, fitLeft(cur - 1) + shift - step, fitTop(cur - 1), 1f) }
+        if (continuous) {
+            // Every page that shows, top to bottom, each with its own tiles.
+            for (i in 0 until n) {
+                val y = pageY(i)
+                if (y > height) break
+                if (y + dh[i] * zoom < 0) continue
+                drawPage(canvas, e, i, left(), y, zoom, want, tiles)
+                drawHits(canvas, e, i, left(), y, zoom)
+                drawFields(canvas, e, i, left(), y, zoom)
+            }
+        } else if (curling()) {
+            drawCurl(canvas, e, want)
+        } else {
+            drawPage(canvas, e, cur, left() + shift, top(), zoom, want, tiles)
+            drawHits(canvas, e, cur, left() + shift, top(), zoom)
+            drawFields(canvas, e, cur, left() + shift, top(), zoom)
+            val step = width + gap
+            if (shift < 0 && cur + 1 < n) { drawPage(canvas, e, cur + 1, fitLeft(cur + 1) + shift + step, fitTop(cur + 1), 1f, want, null); drawHits(canvas, e, cur + 1, fitLeft(cur + 1) + shift + step, fitTop(cur + 1), 1f) }
+            if (shift > 0 && cur > 0) { drawPage(canvas, e, cur - 1, fitLeft(cur - 1) + shift - step, fitTop(cur - 1), 1f, want, null); drawHits(canvas, e, cur - 1, fitLeft(cur - 1) + shift - step, fitTop(cur - 1), 1f) }
+        }
 
         want += tiles
         for (p in intArrayOf(cur + 1, cur - 1, cur + 2, cur - 2)) {
@@ -706,7 +913,7 @@ class PdfView(ctx: Context) : View(ctx) {
      */
     fun reveal(page: Int, rect: RectF, visTop: Float, visBottom: Float) {
         val e = eng ?: return
-        if (page != currentPage) setPage(page)
+        if (page != currentPage && !continuous) setPage(page)
         scroller.forceFinished(true)
         bandTop = visTop; bandBottom = height - visBottom
         if (!locked) zoom = max(zoom, 2f)
@@ -714,7 +921,7 @@ class PdfView(ctx: Context) : View(ctx) {
         val cx = (rect.centerX() - e.crop.left * e.pw[page]) * s
         val cy = (rect.centerY() - e.crop.top * e.ph[page]) * s
         sx = cx - width / 2f
-        sy = cy - (visTop + visBottom) / 2f
+        sy = cy - (visTop + visBottom) / 2f + if (continuous) pos[page] * zoom else 0f
         changed()
     }
 
@@ -724,7 +931,7 @@ class PdfView(ctx: Context) : View(ctx) {
         val s = fit[i] * z  // screen px per point
         val ox = x - e.crop.left * e.pw[i] * s
         val oy = y - e.crop.top * e.ph[i] * s
-        val ink = Theme.accentInk()
+        val ink = ACCENT  // amber on the page in either theme
         val pad = context.dp(2f)
         list.forEachIndexed { k, rects ->
             val focused = focusHit?.let { it.first == i && it.second == k } == true
@@ -783,10 +990,11 @@ class PdfView(ctx: Context) : View(ctx) {
     /** The editable field under screen point (x, y) on the current page. */
     private fun fieldAt(x: Float, y: Float): Field? {
         val e = eng ?: return null
-        val list = fields[currentPage] ?: return null
+        val page = if (continuous) pageAt(y) else currentPage
+        val list = fields[page] ?: return null
         val slop = context.dp(6f)
         return list.lastOrNull { f ->
-            toScreen(e, currentPage, left() + shift, top(), zoom, f.rect, fr)
+            toScreen(e, page, left() + shift, pageY(page), zoom, f.rect, fr)
             fr.inset(-slop, -slop)
             fr.contains(x, y)
         }
@@ -837,6 +1045,14 @@ class PdfView(ctx: Context) : View(ctx) {
             c.drawRect(fr, fieldTint)
             c.drawRect(fr, fieldLine)
         }
+    }
+
+    /** Continuous: the page at screen row [y]. */
+    private fun pageAt(y: Float): Int {
+        val s = (y + sy) / zoom
+        var i = 0
+        while (i + 1 < n && pos[i + 1] - stackGap / 2 <= s) i++
+        return i
     }
 
     private fun fitLeft(i: Int) = (width - dw[i]) / 2

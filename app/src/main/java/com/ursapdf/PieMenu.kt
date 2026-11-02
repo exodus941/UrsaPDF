@@ -37,22 +37,27 @@ class PieMenu(
         /** The finger's turning speed is smoothed over this long (seconds), so uneven touch reports even out. */
         const val SMOOTH = 0.06
         /**
-         * How long the finger must stay in a segment, or the centre, before it ticks.
-         * 62.5 ms; Android's timers count whole milliseconds.
+         * A tick plays the moment the finger crosses into a segment or the centre, but only
+         * once it is this far past the line, degrees round the ring or dp in and out, so a
+         * finger resting on a line does not chatter.
          */
-        const val DWELL = 63L
-        /** The dwell at full pitch, so faster turns still tick per segment. */
-        const val FAST_DWELL = 42L
+        const val HYST_DEG = 4.0
+        const val HYST_DP = 4f
         /** Turns a second where the pitch starts rising, and where it is full. */
         const val SLOW_TURNS = 0.5625
         const val FULL_TURNS = 2.0
         /** The top pitch: half an octave. */
         const val PITCH = 1.4142135623730951
+        /** The volume at full speed against a slow tick: 2, so 6 dB louder. */
+        const val BOOST = 2.0
         /** The beam: its width each side of the finger, in degrees, and its peak strength, 0..1. */
         const val BEAM_HALF = 40f
         const val BEAM_PEAK = 0.5f
         /** The beam's eased fade, sampled at this many stops each side. */
         const val BEAM_STOPS = 8
+        /** The glow round the finger, in the centre too: its radius in dp and peak strength. */
+        const val GLOW_DP = 56f
+        const val GLOW_PEAK = 0.35f
 
         /** 0 below the start, 1 at and past the top, linear between. */
         fun ramp(v: Double, start: Double, top: Double) = ((v - start) / (top - start)).coerceIn(0.0, 1.0)
@@ -76,13 +81,11 @@ class PieMenu(
     private val inner = RectF()
     private val onTheme: () -> Unit = { invalidate() }
     private val step get() = 360f / items.size
-    // One tick for each segment, or the centre, the finger stays in for the dwell; one only
-    // passed through stays silent.
+    // One tick each time the finger crosses into a segment or the centre, at once.
     private val ratchet = Ratchet.shared
     private var region = -1           // under the finger: -1 the centre, else a segment, dimmed ones too
-    private var ticked = -1           // the region the last tick was for
-    // Speed counts: the finger's turns a second, smoothed over SMOOTH, raise the pitch and
-    // shorten the dwell, both from SLOW_TURNS to FULL_TURNS.
+    // Speed counts: the finger's turns a second, smoothed over SMOOTH, raise the pitch from
+    // SLOW_TURNS to FULL_TURNS.
     private var turns = 0.0
     private var turnDeg = Double.NaN  // angle at the last move on the ring
     private var turnAt = 0L           // event time of that move
@@ -90,9 +93,25 @@ class PieMenu(
         val idle = (android.os.SystemClock.uptimeMillis() - turnAt) / 1000.0
         return turns * kotlin.math.exp(-idle.coerceAtLeast(0.0) / SMOOTH)
     }
-    private val settle = Runnable {
-        if (!closing && region != ticked) { ticked = region; ratchet.tick(pitch = pitch(ramp(turnsNow(), SLOW_TURNS, FULL_TURNS))) }
+    private val hystPx = a.dp(HYST_DP)
+
+    /** The region under (d, angle), held on the current one until the finger is clearly past its line. */
+    private fun regionAt(d: Float, angle: Double): Int {
+        val seg = (((angle + step / 2) % 360) / step).toInt().coerceAtMost(items.size - 1)
+        if (region < 0) return if (d > innerR + hystPx) seg else -1
+        if (d < innerR - hystPx) return -1
+        val off = kotlin.math.abs(((angle - region * step + 540) % 360) - 180)
+        return if (off > step / 2 + HYST_DEG) seg else region
     }
+    // The glow round the finger; it fades in with the first move, 62.5 ms.
+    private var fx = x
+    private var fy = y
+    private var glow = 0f
+    private var touched = false
+    private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val glowCols = IntArray(BEAM_STOPS + 1)
+    private val glowPos = FloatArray(BEAM_STOPS + 1)
+    private val clip = Path()
     // The beam: a soft yellow spotlight on the ring at the finger's angle, not bound to the
     // segments. Screen-blended, so its strength is a colour, not an alpha; it fades in and
     // out with the yellow, 62.5 ms, as the finger leaves or enters the centre.
@@ -157,6 +176,7 @@ class PieMenu(
         super.onAttachedToWindow()
         Theme.listeners += onTheme
         growAnim.start()
+        ratchet.start()
         (parent as? android.view.ViewGroup)?.addView(name, android.view.ViewGroup.LayoutParams(
             android.view.ViewGroup.LayoutParams.WRAP_CONTENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT))
     }
@@ -165,7 +185,7 @@ class PieMenu(
         super.onDetachedFromWindow()
         (name.parent as? android.view.ViewGroup)?.removeView(name)
         growAnim.cancel()
-        removeCallbacks(settle)
+        ratchet.stop()
         Theme.listeners -= onTheme
     }
 
@@ -186,7 +206,8 @@ class PieMenu(
             MotionEvent.ACTION_MOVE -> {
                 // 0 degrees at the top, rising clockwise.
                 val angle = (Math.toDegrees(atan2(dx.toDouble(), -dy.toDouble())) + 360) % 360
-                val r = if (d < innerR) -1 else (((angle + step / 2) % 360) / step).toInt().coerceAtMost(items.size - 1)
+                val r = regionAt(d, angle)
+                fx = e.x; fy = e.y; touched = true
                 if (r >= 0) {
                     if (!turnDeg.isNaN() && e.eventTime > turnAt) {
                         val dt = (e.eventTime - turnAt) / 1000.0
@@ -195,16 +216,15 @@ class PieMenu(
                     }
                     turnDeg = angle; turnAt = e.eventTime
                 } else { turnDeg = Double.NaN; turns = 0.0 }
-                if ((r >= 0) != onRing || r >= 0) {
-                    onRing = r >= 0
-                    if (onRing) beamDeg = angle.toFloat()
-                    if (litAt == 0L) litAt = android.os.SystemClock.uptimeMillis()
-                    invalidate()
-                }
+                onRing = r >= 0
+                if (onRing) beamDeg = angle.toFloat()
+                if (litAt == 0L) litAt = android.os.SystemClock.uptimeMillis()
+                invalidate()
                 if (r != region) {
-                    region = r; removeCallbacks(settle)
+                    region = r
                     val f = ramp(turnsNow(), SLOW_TURNS, FULL_TURNS)
-                    postDelayed(settle, DWELL - ((DWELL - FAST_DWELL) * f).toLong())
+                    // Louder as it rises: quick ticks measured softer on a phone speaker.
+                    ratchet.tick(pitch = pitch(f), gain = 1 + (BOOST - 1) * f)
                 }
                 val k = r.takeIf { it >= 0 && items[it].enabled } ?: -1
                 if (k != sel) {
@@ -261,6 +281,29 @@ class PieMenu(
         c.drawOval(oval, beamPaint)
     }
 
+    // A soft round glow on the finger, over the centre disc as well as the ring, so the
+    // beam's light carries into the centre; the centre itself never fills yellow. The same
+    // eased fade and blend as the beam, kept inside the disc.
+    private fun drawGlow(c: Canvas) {
+        val light = Theme.light
+        glowPaint.xfermode = if (light) multiply else screen
+        for (i in 0..BEAM_STOPS) {
+            val t = 1 - i / BEAM_STOPS.toFloat()      // 1 at the finger, 0 at the rim
+            val k = t * t * (3 - 2 * t) * GLOW_PEAK * glow
+            fun ch(v: Int) = if (light) (255 - (255 - v) * k).toInt() else (v * k).toInt()
+            glowCols[i] = android.graphics.Color.rgb(
+                ch(android.graphics.Color.red(ACCENT)), ch(android.graphics.Color.green(ACCENT)), ch(android.graphics.Color.blue(ACCENT)))
+            glowPos[i] = i / BEAM_STOPS.toFloat()
+        }
+        val r = a.dp(GLOW_DP)
+        glowPaint.shader = android.graphics.RadialGradient(fx, fy, r, glowCols, glowPos, android.graphics.Shader.TileMode.CLAMP)
+        c.save()
+        clip.reset(); clip.addOval(oval, Path.Direction.CW)
+        c.clipPath(clip)
+        c.drawCircle(fx, fy, r, glowPaint)
+        c.restore()
+    }
+
     override fun onDraw(c: Canvas) {
         if (grow <= 0f) return
         c.scale(grow, grow, downX, downY)
@@ -281,6 +324,7 @@ class PieMenu(
         val beamWant = if (onRing) 1f else 0f
         beam = if (beam < beamWant) minOf(beamWant, beam + dt) else maxOf(beamWant, beam - dt)
         if (beam != beamWant) moving = true
+        if (touched && glow < 1f) { glow = minOf(1f, glow + dt); moving = true }
         if (moving) postInvalidateOnAnimation() else litAt = 0L
         // A lit segment: a ring sector, centred on its angle.
         for (k in lit.indices) {
@@ -304,6 +348,7 @@ class PieMenu(
         fill.color = Theme.panel()
         c.drawOval(inner, fill)
         c.drawOval(inner, edge)
+        if (glow > 0f) drawGlow(c)
         edge.color = Theme.outline()
         c.drawOval(oval, edge)
         val mid = (innerR + outerR) / 2

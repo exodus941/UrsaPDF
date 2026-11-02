@@ -80,7 +80,7 @@ class Ratchet {
         // VARIANTS of each, every one from its own noise, taken in turn: two copies of one noise
         // overlapping (a close over the open's tail, or a quick re-open) comb-filtered into a flanger.
         val swish = listOf(true, false).flatMap { o -> (0 until VARIANTS).map { o to it } }.map { (o, v) ->
-            val (s, first) = makeWhoosh(o, 10L + v + if (o) 0 else VARIANTS)
+            val (s, first) = makeConfirm(o)  // the whoosh (makeWhoosh) is kept for now, unused
             val k = (target / loud(s.copyOfRange(0, first.coerceIn(1, s.size)))).toFloat()
             FloatArray(s.size) { s[it] * k }
         }
@@ -159,6 +159,43 @@ class Ratchet {
         return out.copyOfRange(skip, n) to ((rate * dur).toInt() - skip)
     }
 
+    /**
+     * "Chord confirm, Boot pitches", chosen on the demo page: two square-wave chords, 1.8 and
+     * 4.5 kHz for 50 ms, then 3.3 and 8.1 kHz for 65 ms, 75 ms after the first; close plays
+     * them the other way. Each square is summed from its odd harmonics under 20 kHz, as a
+     * browser's oscillator is, so none folds back; each note is gated with a 2 ms edge, and the
+     * whole goes through a low-pass at 9 kHz. The sound, and its length for loudness.
+     */
+    private fun makeConfirm(open: Boolean): Pair<FloatArray, Int> {
+        val low = doubleArrayOf(1800.0, 4500.0); val high = doubleArrayOf(3300.0, 8100.0)
+        val notes = if (open) listOf(Triple(0.0, 0.05, low), Triple(0.075, 0.065, high))
+                    else listOf(Triple(0.0, 0.05, high), Triple(0.075, 0.065, low))
+        val n = (rate * 0.145).toInt()
+        val out = FloatArray(n)
+        for ((at, dur, chord) in notes) {
+            val i0 = (rate * at).toInt(); val len = (rate * dur).toInt(); val edge = rate * 0.002
+            for (j in 0 until len) {
+                val t = j.toDouble() / rate
+                var v = 0.0
+                for (f in chord) {
+                    var k = 1
+                    while (k * f < 20000) { v += sin(2 * PI * k * f * t) / k; k += 2 }
+                }
+                val g = minOf(1.0, j / edge, (len - j) / edge)
+                if (i0 + j < n) out[i0 + j] += (v / chord.size * 4 / PI * g).toFloat()
+            }
+        }
+        val w = 2 * PI * 9000.0 / rate; val al = sin(w) / (2 * 0.707); val cw = cos(w)
+        val b0 = (1 - cw) / 2; val b1 = 1 - cw; val a0 = 1 + al; val a1 = -2 * cw; val a2 = 1 - al
+        var p1 = 0.0; var p2 = 0.0; var q1 = 0.0; var q2 = 0.0
+        for (i in 0 until n) {
+            val x = out[i].toDouble()
+            val y = (b0 * x + b1 * p1 + b0 * p2 - a1 * q1 - a2 * q2) / a0
+            p2 = p1; p1 = x; q2 = q1; q1 = y; out[i] = y.toFloat()
+        }
+        return out to n
+    }
+
     private fun energy(x: FloatArray) = x.sumOf { it.toDouble() * it }.takeIf { it > 0 } ?: 1.0
 
     private fun make(f: Double): FloatArray {
@@ -201,8 +238,8 @@ class Ratchet {
     private val main = android.os.Handler(android.os.Looper.getMainLooper())
     private val stopper = Runnable { stop() }
 
-    /** Closes the stream once a sound just started has played out (the close sound runs about 1 s). */
-    fun stopLater() { main.removeCallbacks(stopper); main.postDelayed(stopper, 1100) }
+    /** Closes the stream once a sound just started has played out (the close sound runs 145 ms). */
+    fun stopLater() { main.removeCallbacks(stopper); main.postDelayed(stopper, 300) }
 
     /** The pie's open or close sound. */
     fun whoosh(open: Boolean) {

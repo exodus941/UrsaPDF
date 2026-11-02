@@ -67,10 +67,10 @@ class PieMenu(
         const val SEL_MS = 125f
         /** The shadow's soft outer part: darkness and blur (dp); it stays centred under the disc. */
         const val PENUMBRA_DARK = 0.35f
-        const val PENUMBRA_BLUR = 42f    // the spread, three times 14
+        const val PENUMBRA_BLUR = 120f   // the spread, as C on the demo page
         /** Its darker core: darkness, blur (dp), radius against the disc's, and how far (dp) it slides away from a press. */
         const val UMBRA_DARK = 0.3f
-        const val UMBRA_BLUR = 15f       // three times 5
+        const val UMBRA_BLUR = 40f
         const val UMBRA_SIZE = 0.96f
         const val UMBRA_SHIFT = 10f
 
@@ -163,17 +163,17 @@ class PieMenu(
     // at rest: a soft, wide penumbra that stays put, and a darker, tighter umbra that slides
     // away from the pressed edge, up to UMBRA_SHIFT dp, so it shows just past the raised rim, as
     // under a disc tipped down on that side. Each fades by easing its grey to white.
-    // A round shadow [dark] at its fullest, out to a third of [spreadDp] inside the rim [r],
-    // then falling off by inverse square, 1 / (1 + (x / core)²) with the core a quarter of the
+    // A round shadow [dark] at its fullest out to the rim [r] (C, chosen on the demo page),
+    // then falling off by inverse square, 1 / (1 + (x / core)²) with the core half of the
     // fall, rescaled to reach nothing [spreadDp] beyond where it began.
     private fun shadowDisc(dark: Float, spreadDp: Float, r: Float): android.graphics.Bitmap {
-        val sp = a.dp(spreadDp); val r0 = r - sp / 3; val big = r0 + sp
+        val sp = a.dp(spreadDp); val r0 = r; val big = r0 + sp
         val s = (2 * big).toInt() + 2
         val cols = IntArray(GLOW_STOPS + 2); val pos = FloatArray(GLOW_STOPS + 2)
-        val edge = 1f / (1f + 16f)                     // the inverse square at the far end, core 0.25
+        val edge = 1f / (1f + 4f)                      // the inverse square at the far end, core 0.5
         cols[0] = grey(dark); pos[0] = 0f
         for (i in 0..GLOW_STOPS) {
-            val u = i / GLOW_STOPS.toFloat(); val q = u / 0.25f
+            val u = i / GLOW_STOPS.toFloat(); val q = u / 0.5f
             cols[i + 1] = grey(dark * (1f / (1f + q * q) - edge) / (1f - edge))
             pos[i + 1] = (r0 + sp * u) / big
         }

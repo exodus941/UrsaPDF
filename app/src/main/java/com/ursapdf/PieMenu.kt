@@ -48,16 +48,18 @@ class PieMenu(
         const val FULL_TURNS = 2.0
         /** The top pitch: half an octave. */
         const val PITCH = 1.4142135623730951
-        /** The volume at full speed against a slow tick: 2, so 6 dB louder. */
-        const val BOOST = 2.0
+        /** The volume at full speed against a slow tick: 4, so 12 dB louder (6 dB still faded); capped short of clipping. */
+        const val BOOST = 4.0
         /** The beam: its width each side of the finger, in degrees, and its peak strength, 0..1. */
         const val BEAM_HALF = 40f
         const val BEAM_PEAK = 0.5f
         /** The beam's eased fade, sampled at this many stops each side. */
         const val BEAM_STOPS = 8
         /** The glow round the finger, in the centre too: its radius in dp and peak strength. */
-        const val GLOW_DP = 56f
+        const val GLOW_DP = 112f
         const val GLOW_PEAK = 0.35f
+        /** The yellow selector's and the name pill's fade, in and out, linear: 125 ms. */
+        const val SEL_MS = 125f
         /** The shadow: the light's height over the screen's middle, the disc's over the page (dp), its darkness and blur. */
         const val SHADOW_LIGHT = 450f
         const val SHADOW_PIN = 48f
@@ -129,7 +131,7 @@ class PieMenu(
     private val beamCols = IntArray(BEAM_STOPS * 2 + 1)
     private val beamPos = FloatArray(BEAM_STOPS * 2 + 1)
     private val beamTurn = android.graphics.Matrix()
-    // Each segment's yellow, 0..1; it moves toward its target over 62.5 ms, linear.
+    // Each segment's yellow, 0..1; it moves toward its target over SEL_MS (125 ms), linear.
     private val lit = FloatArray(items.size)
     private var litAt = 0L            // last fade step; 0 while every segment is settled
     private val blend = android.animation.ArgbEvaluator()
@@ -221,7 +223,7 @@ class PieMenu(
 
     // The hovered item's name, in the page pill's style: above the disc, else beside it on
     // the side away from the thumb (left, or right when [leftHanded]), else below. A sibling
-    // view, so the disc's tilt does not skew it. Fades with the yellow, 62.5 ms.
+    // view, so the disc's tilt does not skew it. Fades with the yellow, SEL_MS.
     private val name = a.label("", 13f, Theme.text(), bold = true).apply {
         setPadding(a.dpi(16), a.dpi(8), a.dpi(16), a.dpi(8))
         alpha = 0f
@@ -229,7 +231,7 @@ class PieMenu(
 
     private fun showName() {
         val it = items.getOrNull(sel)
-        if (it == null) { name.animate().alpha(0f).setDuration((62.5f * name.alpha).toLong()).setInterpolator(Motion.FADE).start(); return }
+        if (it == null) { name.animate().alpha(0f).setDuration((SEL_MS * name.alpha).toLong()).setInterpolator(Motion.FADE).start(); return }
         name.text = it.name
         name.setTextColor(Theme.text())
         name.background = a.pill(Theme.panel(), 14f)
@@ -243,7 +245,7 @@ class PieMenu(
             else -> cx - w / 2f to cy + outerR + gap
         }
         name.translationX = x; name.translationY = y
-        name.animate().alpha(1f).setDuration((62.5f * (1 - name.alpha)).toLong()).setInterpolator(Motion.FADE).start()
+        name.animate().alpha(1f).setDuration((SEL_MS * (1 - name.alpha)).toLong()).setInterpolator(Motion.FADE).start()
     }
 
     override fun onAttachedToWindow() {
@@ -397,12 +399,13 @@ class PieMenu(
         c.drawOval(oval, fill)
         // Step every segment's yellow toward its target by the time since the last frame.
         val now = android.os.SystemClock.uptimeMillis()
-        val dt = if (litAt == 0L) 0f else (now - litAt) / 62.5f
+        val dt = if (litAt == 0L) 0f else (now - litAt) / 62.5f       // the beam and glow
+        val dtSel = dt * 62.5f / SEL_MS                                // the yellow, slower
         litAt = now
         var moving = false
         for (k in lit.indices) {
             val want = if (k == sel) 1f else 0f
-            lit[k] = if (lit[k] < want) minOf(want, lit[k] + dt) else maxOf(want, lit[k] - dt)
+            lit[k] = if (lit[k] < want) minOf(want, lit[k] + dtSel) else maxOf(want, lit[k] - dtSel)
             if (lit[k] != want) moving = true
         }
         val beamWant = if (onRing) 1f else 0f

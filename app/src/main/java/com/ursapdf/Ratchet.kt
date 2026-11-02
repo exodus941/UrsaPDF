@@ -30,6 +30,7 @@ import kotlin.math.sqrt
 class Ratchet {
     private val rate = 48000
     private val sounds: List<FloatArray>
+    private val peaks: List<Float>    // each sound's peak, so a boosted tick stops short of clipping
     private val voices = ArrayList<IntArray>()  // [sound, position] of each tick playing
     private var track: AudioTrack? = null
     private var thread: Thread? = null
@@ -40,8 +41,10 @@ class Ratchet {
         const val STEPS = 6
         /** Frames mixed per write: 1 ms. */
         const val CHUNK = 48
-        /** The open and close sound's loudness against a tick: 33%, set by the user. */
-        const val WHOOSH = 0.33
+        /** The open and close sound's loudness against a tick: 25%, set by the user. */
+        const val WHOOSH = 0.25
+        /** The open and close sound starts this far (dB) under its peak; the quieter lead-in is cut. */
+        const val LEAD_DB = 30.0
         /** The open and close sound's length against 340 ms: 1.5 and 2, set by the user. */
         const val OPEN_K = 1.5
         const val CLOSE_K = 2.0
@@ -59,6 +62,7 @@ class Ratchet {
         val target = loud(ticks[0]) * WHOOSH
         val swish = listOf(makeWhoosh(true), makeWhoosh(false)).map { s -> val k = (target / loud(s)).toFloat(); FloatArray(s.size) { s[it] * k } }
         sounds = ticks + swish
+        peaks = sounds.map { s -> s.maxOf { kotlin.math.abs(it) }.coerceAtLeast(1e-6f) }
     }
 
     /** RMS over the samples that sound, as the demo page measured it. */
@@ -93,7 +97,11 @@ class Ratchet {
             val g = if (t < rise) 0.0001 * Math.pow(0.6 / 0.0001, t / rise) else 0.6 * Math.pow(0.0001 / 0.6, (t - rise) / (dur - rise))
             out[i] = (y * g).toFloat()
         }
-        return out
+        // It felt late: its swell starts 76 dB down and is inaudible for most of the rise. Drop
+        // what lies more than LEAD_DB under the peak, so it sounds at once, at the same speed.
+        val quiet = 20 * kotlin.math.log10(0.0001 / 0.6)           // -75.6 dB
+        val skip = (rate * rise * (1 - LEAD_DB / -quiet)).toInt()
+        return out.copyOfRange(skip, n)
     }
 
     private fun energy(x: FloatArray) = x.sumOf { it.toDouble() * it }.takeIf { it > 0 } ?: 1.0
@@ -197,6 +205,6 @@ class Ratchet {
     fun tick(pitch: Double = 1.0, gain: Double = 1.0) {
         if (!running) return
         val step = (12 * ln(pitch) / ln(2.0)).roundToInt().coerceIn(0, STEPS)
-        synchronized(voices) { if (voices.size < 4) voices += intArrayOf(step, 0, (gain * 1000).toInt()) }
+        synchronized(voices) { if (voices.size < 4) voices += intArrayOf(step, 0, (minOf(gain, 0.98 / peaks[step]) * 1000).toInt()) }
     }
 }

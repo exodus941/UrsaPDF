@@ -55,7 +55,7 @@ class PdfView(ctx: Context) : View(ctx) {
         const val CURL_GRID = 40
         const val CURL_RADIUS = 0.22f
         /** Page Turn: the bend at its darkest, edge on to the viewer. */
-        const val CURL_DIM = 0.55f
+        const val CURL_DIM = 0.5f
     }
 
     private enum class Drag { NONE, TURN, VERTICAL, PAN }
@@ -504,7 +504,7 @@ class PdfView(ctx: Context) : View(ctx) {
         val sh = context.dp(24f)
         c.save()
         c.clipRect(fitLeft(under), fitTop(under), fitLeft(under) + dw[under], fitTop(under) + dh[under])
-        shade.shader = android.graphics.LinearGradient(ex, ey, ex + nx * sh, ey + ny * sh, 0x59000000, 0, android.graphics.Shader.TileMode.CLAMP)
+        shade.shader = android.graphics.LinearGradient(ex, ey, ex + nx * sh, ey + ny * sh, 0x54000000, 0, android.graphics.Shader.TileMode.CLAMP)  // 33% black
         // Only beyond the bend: a half-plane, drawn as a big rectangle turned to the axis.
         c.save()
         c.rotate(Math.toDegrees(kotlin.math.atan2(ny.toDouble(), nx.toDouble())).toFloat(), ex, ey)

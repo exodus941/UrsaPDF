@@ -36,6 +36,8 @@ class PieMenu(
         const val TILT = 20f
         /** The finger's turning speed is smoothed over this long (seconds), so uneven touch reports even out. */
         const val SMOOTH = 0.06
+        /** The finger's turning speed is its travel over this long, in ms. */
+        const val SPEED_MS = 80L
         /**
          * A tick plays the moment the finger crosses into a segment or the centre, but only
          * once it is this far past the line, degrees round the ring or dp in and out, so a
@@ -65,13 +67,13 @@ class PieMenu(
         const val SEL_MS = 125f
         /** The shadow: the light's height over the screen's middle, the disc's over the page (dp), its darkness and blur. */
         const val SHADOW_LIGHT = 450f
-        const val SHADOW_PIN = 48f
+        const val SHADOW_PIN = 24f
         const val SHADOW_DARK = 0.5f
         const val SHADOW_BLUR = 14f
         /** How much of the disc's tilt moves its shadow: a quarter, about 10 dp of lift at the rim. */
         const val SHADOW_TILT = 0.25f
-        /** The light sits this far (dp) above the screen's middle, so even a centred disc casts its shadow 12 dp down. */
-        const val SHADOW_UP = 100f
+        /** The light sits this far (dp) above the screen's middle, so even a centred disc casts its shadow about 4.5 dp down. */
+        const val SHADOW_UP = 80f
         /** The disc's camera: cameraDistance 8000 dp over densityDpi, at 72 px an inch. */
         const val CAMERA_PX = 8000f / 160f * 72f
 
@@ -105,6 +107,9 @@ class PieMenu(
     private var turns = 0.0
     private var turnDeg = Double.NaN  // angle at the last move on the ring
     private var turnAt = 0L           // event time of that move
+    private val trail = ArrayDeque<Pair<Long, Double>>()  // (event time, degrees travelled) over the last SPEED_MS
+    private var travel = 0.0          // degrees travelled round the ring this visit
+    private var lastF = 0.0           // the last tick's place on the pitch ramp
     private fun turnsNow(): Double {
         val idle = (android.os.SystemClock.uptimeMillis() - turnAt) / 1000.0
         return turns * kotlin.math.exp(-idle.coerceAtLeast(0.0) / SMOOTH)
@@ -321,20 +326,24 @@ class PieMenu(
                 val r = regionAt(d, angle)
                 fx = e.x; fy = e.y; touched = true
                 if (r >= 0) {
-                    if (!turnDeg.isNaN() && e.eventTime > turnAt) {
-                        val dt = (e.eventTime - turnAt) / 1000.0
-                        val now = kotlin.math.abs(((angle - turnDeg + 540) % 360) - 180) / 360 / dt
-                        turns += (now - turns) * (1 - kotlin.math.exp(-dt / SMOOTH))
-                    }
+                    // Speed over the last SPEED_MS of travel, not between two reports: two reports
+                    // a millisecond apart read as a huge speed, and one tick leapt in pitch.
+                    if (!turnDeg.isNaN()) travel += kotlin.math.abs(((angle - turnDeg + 540) % 360) - 180)
+                    trail.addLast(e.eventTime to travel)
+                    while (trail.size > 2 && e.eventTime - trail[1].first >= SPEED_MS) trail.removeFirst()
+                    val (t0, a0) = trail.first()
+                    if (e.eventTime - t0 >= 20) turns = (travel - a0) / 360 / ((e.eventTime - t0) / 1000.0)
                     turnDeg = angle; turnAt = e.eventTime
-                } else { turnDeg = Double.NaN; turns = 0.0 }
+                } else { turnDeg = Double.NaN; turns = 0.0; trail.clear(); travel = 0.0 }
                 onRing = r >= 0
                 if (onRing) beamDeg = angle.toFloat()
                 if (litAt == 0L) litAt = android.os.SystemClock.uptimeMillis()
                 invalidate()
                 if (r != region) {
                     region = r
-                    val f = ramp(turnsNow(), SLOW_TURNS, FULL_TURNS)
+                    // At most a semitone (a sixth of the range) from one tick to the next.
+                    val f = ramp(turnsNow(), SLOW_TURNS, FULL_TURNS).coerceIn(lastF - 1.0 / 6, lastF + 1.0 / 6)
+                    lastF = f
                     // Louder as it rises: quick ticks measured softer on a phone speaker.
                     ratchet.tick(pitch = pitch(f), gain = 1 + (BOOST - 1) * f)
                 }

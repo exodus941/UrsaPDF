@@ -47,7 +47,10 @@ class Ratchet {
         const val LEAD_DB = 30.0
         /** The open and close sound's tail is this many times its first length, set by the user; its top is rolled off above SMOOTH_HZ. */
         const val TAIL = 2.0
-        const val SMOOTH_HZ = 1200.0
+        const val SMOOTH_HZ = 4000.0
+        /** The open and close sound's low cut and its band's width: airier, lighter, not whistly (user). */
+        const val BODY_HZ = 450.0
+        const val BAND_Q = 0.8
         /** Versions of the open and of the close sound, each from its own noise, played in turn. */
         const val VARIANTS = 3
         /** The open and close sound's length against 340 ms: 1.5 and 2, set by the user. */
@@ -85,7 +88,7 @@ class Ratchet {
     }
 
     /**
-     * "Air into Gust", as chosen on the demo page: white noise through a band-pass (Q 1.6)
+     * "Air into Gust", as chosen on the demo page: white noise through a band-pass (Q BAND_Q, 0.8: wider, airier and less whistly than the demo's 1.6)
      * sweeping 300 Hz to 3 kHz on open, back down on close, exponentially over 95% of its
      * 340 ms, stretched by OPEN_K or CLOSE_K (510 and 680 ms, set by the user). It swells to its
      * peak in a third of the 340 ms, stretched alike, and dies away by the end, both exponential.
@@ -96,7 +99,7 @@ class Ratchet {
         // The tail after the peak runs TAIL times as long; the sweep keeps its own pace and holds at its end.
         val end = rise + (dur - rise) * TAIL
         val n = (rate * end).toInt()
-        val lo = 300.0; val hi = 3000.0; val q = 1.6
+        val lo = 300.0; val hi = 3000.0; val q = BAND_Q
         val rnd = java.util.Random(seed)
         val out = FloatArray(n)
         var x1 = 0.0; var x2 = 0.0; var y1 = 0.0; var y2 = 0.0
@@ -113,11 +116,12 @@ class Ratchet {
             val g = if (t < rise) 0.0001 * Math.pow(0.6 / 0.0001, t / rise) else 0.6 * Math.pow(0.0001 / 0.6, (t - rise) / (end - rise))
             out[i] = (y * g).toFloat()
         }
-        // EQ: a low-pass (Q 0.707) at SMOOTH_HZ, run twice for 24 dB an octave; once, at 12 dB,
-        // left the top of the 3 kHz sweep audible.
-        repeat(2) {
-            val w = 2 * PI * SMOOTH_HZ / rate; val al = sin(w) / (2 * 0.707); val cw = cos(w)
-            val b0 = (1 - cw) / 2; val b1 = 1 - cw; val a0 = 1 + al; val a1 = -2 * cw; val a2 = 1 - al
+        // EQ, both Q 0.707: a high-pass at BODY_HZ takes out the low-mid weight ("too mid-heavy"),
+        // and one gentle low-pass at SMOOTH_HZ softens only the harshest top, adding nothing.
+        for ((hz, high) in listOf(BODY_HZ to true, SMOOTH_HZ to false)) {
+            val w = 2 * PI * hz / rate; val al = sin(w) / (2 * 0.707); val cw = cos(w)
+            val b0 = if (high) (1 + cw) / 2 else (1 - cw) / 2; val b1 = if (high) -(1 + cw) else 1 - cw
+            val a0 = 1 + al; val a1 = -2 * cw; val a2 = 1 - al
             var p1 = 0.0; var p2 = 0.0; var q1 = 0.0; var q2 = 0.0
             for (i in 0 until n) {
                 val xin = out[i].toDouble()

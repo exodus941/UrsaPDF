@@ -68,6 +68,12 @@ class PieMenu(
         const val SHADOW_PIN = 48f
         const val SHADOW_DARK = 0.5f
         const val SHADOW_BLUR = 14f
+        /** How much of the disc's tilt moves its shadow: a quarter, about 10 dp of lift at the rim. */
+        const val SHADOW_TILT = 0.25f
+        /** The light sits this far (dp) above the screen's middle, so even a centred disc casts its shadow 12 dp down. */
+        const val SHADOW_UP = 100f
+        /** The disc's camera: cameraDistance 8000 dp over densityDpi, at 72 px an inch. */
+        const val CAMERA_PX = 8000f / 160f * 72f
 
         /** 0 below the start, 1 at and past the top, linear between. */
         fun ramp(v: Double, start: Double, top: Double) = ((v - start) / (top - start)).coerceIn(0.0, 1.0)
@@ -182,7 +188,7 @@ class PieMenu(
         override fun onDraw(c: Canvas) {
             val k = grow * alphaNow()
             if (k <= 0f) return
-            val lx = width / 2f; val ly = height / 2f; val lz = a.dp(SHADOW_LIGHT); val pin = a.dp(SHADOW_PIN)
+            val lx = width / 2f; val ly = height / 2f - a.dp(SHADOW_UP); val lz = a.dp(SHADOW_LIGHT); val pin = a.dp(SHADOW_PIN)
             // The disc's tilt, as the view's rotation sets it: the pressed side dips by up to TILT.
             val dx = (fx - cx).takeIf { touched } ?: 0f; val dy = (fy - cy).takeIf { touched } ?: 0f
             val d = hypot(dx, dy)
@@ -197,13 +203,33 @@ class PieMenu(
                 // Rodrigues' rotation about (kx, ky, 0).
                 val x = (t * kx * kx + co) * px + t * kx * ky * py
                 val y = t * kx * ky * px + (t * ky * ky + co) * py
-                val z = -ky * si * px + kx * si * py
-                val wx = cx + x; val wy = cy + y; val wz = pin + z
+                // The drawn tilt looks slight from the view's far camera; at its full 20 degrees the rim
+                // would rise 41 dp and swing the shadow far past what the eye sees, so it lifts SHADOW_TILT of that.
+                val z = (-ky * si * px + kx * si * py) * SHADOW_TILT
+                // Cast from the disc as drawn: the view's camera draws the side tilted away
+                // smaller, so the shadow follows that rim and tucks under it on the pressed side,
+                // rather than showing past it as a squashed band. Android puts that camera
+                // cameraDistance / densityDpi inches away at 72 px an inch: 3600 px here.
+                val pz = CAMERA_PX / (CAMERA_PX - z)
+                val wx = cx + x * pz; val wy = cy + y * pz; val wz = pin + z
                 val f = lz / (lz - wz)
                 shadowDst[2 * i] = lx + (wx - lx) * f; shadowDst[2 * i + 1] = ly + (wy - ly) * f
                 shadowSrc[2 * i] = half + px / grow; shadowSrc[2 * i + 1] = half + py / grow
             }
-            shadowMap.setPolyToPoly(shadowSrc, 0, shadowDst, 0, 4)
+            // An even ellipse through the four projected points: centre midway between opposite
+            // rim points, axes half their spans. Mapping all four exactly squeezed the blur on
+            // the low side into a hard, squashed band; this keeps the edge equally soft all round
+            // and lets the shadow slide under the disc on the pressed side.
+            val ex = (shadowDst[0] + shadowDst[4]) / 2; val ey = (shadowDst[1] + shadowDst[5]) / 2
+            val fx0 = (shadowDst[0] - shadowDst[4]) / 2; val fy0 = (shadowDst[1] - shadowDst[5]) / 2
+            val fx1 = (shadowDst[2] - shadowDst[6]) / 2; val fy1 = (shadowDst[3] - shadowDst[7]) / 2
+            shadowDst[0] = ex; shadowDst[1] = ey
+            shadowDst[2] = ex + fx0; shadowDst[3] = ey + fy0
+            shadowDst[4] = ex + fx1; shadowDst[5] = ey + fy1
+            shadowSrc[0] = half; shadowSrc[1] = half
+            shadowSrc[2] = half + outerR; shadowSrc[3] = half
+            shadowSrc[4] = half; shadowSrc[5] = half + outerR
+            shadowMap.setPolyToPoly(shadowSrc, 0, shadowDst, 0, 3)
             // Fading: the grey eases to white, which multiplies to nothing.
             val s = k; val o = 255 * (1 - s)
             fadeM.set(floatArrayOf(s, 0f, 0f, 0f, o, 0f, s, 0f, 0f, o, 0f, 0f, s, 0f, o, 0f, 0f, 0f, 1f, 0f))

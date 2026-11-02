@@ -51,6 +51,9 @@ class Ratchet {
         /** The open and close sound's band sweeps between these, in Hz: low, a thrum, not a whip (user). */
         const val SWEEP_LO = 200.0
         const val SWEEP_HI = 1200.0
+        /** The open and close sound's mid dip: its centre and depth. */
+        const val MID_HZ = 700.0
+        const val MID_DB = -8.0
         /** The open and close sound's EQ and band width: airier and lighter, less mid, a hint of bass (user). */
         const val SUB_HZ = 70.0
         const val BASS_HZ = 220.0
@@ -144,6 +147,11 @@ class Ratchet {
         fun coef(hz: Double, q: Double) = (2 * PI * hz / rate).let { w -> Triple(sin(w) / (2 * q), cos(w), w) }
         coef(SUB_HZ, 0.707).let { (al, cw) -> pass((1 + cw) / 2, -(1 + cw), (1 + cw) / 2, 1 + al, -2 * cw, 1 - al) }
         repeat(1) { coef(SMOOTH_HZ, 0.707).let { (al, cw) -> pass((1 - cw) / 2, 1 - cw, (1 - cw) / 2, 1 + al, -2 * cw, 1 - al) } }
+        // A MID_DB dip at MID_HZ, the middle of the sweep: the mids still stood out (user).
+        coef(MID_HZ, 0.8).let { (al, cw) ->
+            val a = Math.pow(10.0, MID_DB / 40)
+            pass(1 + al * a, -2 * cw, 1 - al * a, 1 + al / a, -2 * cw, 1 - al / a)
+        }
         // It felt late: its swell starts 76 dB down and is inaudible for most of the rise. Drop
         // what lies more than LEAD_DB under the peak, so it sounds at once, at the same speed.
         val quiet = 20 * kotlin.math.log10(0.0001 / 0.6)           // -75.6 dB

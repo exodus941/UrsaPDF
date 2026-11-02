@@ -54,7 +54,7 @@ class PieMenu(
         const val BOOST = 4.0
         /** The beam: its width each side of the finger, in degrees, and its peak strength, 0..1. */
         const val BEAM_HALF = 40f
-        const val BEAM_PEAK = 0.5f
+        const val BEAM_PEAK = 0.75f  // 50% brighter than the first 0.5 (user)
         /** The beam's eased fade, sampled at this many stops each side. */
         const val BEAM_STOPS = 8
         /** The glow round the finger, in the centre too: its radius in dp and peak strength. */
@@ -66,10 +66,10 @@ class PieMenu(
         /** The yellow selector's and the name pill's fade, in and out, linear: 125 ms. */
         const val SEL_MS = 125f
         /** The shadow's soft outer part: darkness and blur (dp); it stays centred under the disc. */
-        const val PENUMBRA_DARK = 0.231f  // 66% of 0.35
+        const val PENUMBRA_DARK = 0.35f
         const val PENUMBRA_BLUR = 42f    // the spread, three times 14
         /** Its darker core: darkness, blur (dp), radius against the disc's, and how far (dp) it slides away from a press. */
-        const val UMBRA_DARK = 0.198f     // 66% of 0.3
+        const val UMBRA_DARK = 0.3f
         const val UMBRA_BLUR = 15f       // three times 5
         const val UMBRA_SIZE = 0.96f
         const val UMBRA_SHIFT = 10f

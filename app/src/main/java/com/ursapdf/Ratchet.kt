@@ -41,15 +41,19 @@ class Ratchet {
         const val STEPS = 6
         /** Frames mixed per write: 1 ms. */
         const val CHUNK = 48
-        /** The open and close sound's loudness against a tick: 25%, set by the user. */
-        const val WHOOSH = 0.25
+        /** The open and close sound's loudness against a tick: 12.5%, set by the user. */
+        const val WHOOSH = 0.125
         /** The open and close sound starts this far (dB) under its peak; the quieter lead-in is cut. */
         const val LEAD_DB = 30.0
         /** The open and close sound's tail is this many times its first length, set by the user; its top is rolled off above SMOOTH_HZ. */
         const val TAIL = 2.0
         const val SMOOTH_HZ = 4000.0
-        /** The open and close sound's low cut and its band's width: airier, lighter, not whistly (user). */
-        const val BODY_HZ = 450.0
+        /** The open and close sound's EQ and band width: airier and lighter, less mid, a hint of bass (user). */
+        const val SUB_HZ = 70.0
+        const val BASS_HZ = 220.0
+        const val BASS = 0.75
+        const val MID_HZ = 1000.0
+        const val MID_DB = -9.0
         const val BAND_Q = 0.8
         /** Versions of the open and of the close sound, each from its own noise, played in turn. */
         const val VARIANTS = 3
@@ -101,8 +105,14 @@ class Ratchet {
         val n = (rate * end).toInt()
         val lo = 300.0; val hi = 3000.0; val q = BAND_Q
         val rnd = java.util.Random(seed)
+        val low = java.util.Random(seed + 1000)
         val out = FloatArray(n)
         var x1 = 0.0; var x2 = 0.0; var y1 = 0.0; var y2 = 0.0
+        // A hint of bass: its own noise through a low-pass at BASS_HZ, about 10 dB under the
+        // band, swelling with it. Sub-bass comes off below in the EQ.
+        val bw = 2 * PI * BASS_HZ / rate; val bal = sin(bw) / (2 * 0.707); val bcw = cos(bw)
+        val bb0 = (1 - bcw) / 2; val bb1 = 1 - bcw; val ba0 = 1 + bal; val ba1 = -2 * bcw; val ba2 = 1 - bal
+        var l1 = 0.0; var l2 = 0.0; var m1 = 0.0; var m2 = 0.0
         for (i in 0 until n) {
             val t = i.toDouble() / rate
             val u = (t / (dur * 0.95)).coerceAtMost(1.0)
@@ -114,22 +124,29 @@ class Ratchet {
             val y = (alpha * xin - alpha * x2 - a1 * y1 - a2 * y2) / a0
             x2 = x1; x1 = xin; y2 = y1; y1 = y
             val g = if (t < rise) 0.0001 * Math.pow(0.6 / 0.0001, t / rise) else 0.6 * Math.pow(0.0001 / 0.6, (t - rise) / (end - rise))
-            out[i] = (y * g).toFloat()
+            val lin = low.nextDouble() * 2 - 1
+            val b = (bb0 * lin + bb1 * l1 + bb0 * l2 - ba1 * m1 - ba2 * m2) / ba0
+            l2 = l1; l1 = lin; m2 = m1; m1 = b
+            out[i] = ((y + b * BASS) * g).toFloat()
         }
-        // EQ, both Q 0.707: a high-pass at BODY_HZ takes out the low-mid weight ("too mid-heavy"),
-        // and one gentle low-pass at SMOOTH_HZ softens only the harshest top, adding nothing.
-        for ((hz, high) in listOf(BODY_HZ to true, SMOOTH_HZ to false)) {
-            val w = 2 * PI * hz / rate; val al = sin(w) / (2 * 0.707); val cw = cos(w)
-            val b0 = if (high) (1 + cw) / 2 else (1 - cw) / 2; val b1 = if (high) -(1 + cw) else 1 - cw
-            val a0 = 1 + al; val a1 = -2 * cw; val a2 = 1 - al
+        // EQ: a high-pass at SUB_HZ (no sub-bass), a MID_DB dip at MID_HZ (it was "angry and
+        // very much mid-heavy"), and one gentle low-pass at SMOOTH_HZ that adds no treble.
+        fun pass(b0: Double, b1: Double, b2: Double, a0: Double, a1: Double, a2: Double) {
             var p1 = 0.0; var p2 = 0.0; var q1 = 0.0; var q2 = 0.0
             for (i in 0 until n) {
                 val xin = out[i].toDouble()
-                val y = (b0 * xin + b1 * p1 + b0 * p2 - a1 * q1 - a2 * q2) / a0
+                val y = (b0 * xin + b1 * p1 + b2 * p2 - a1 * q1 - a2 * q2) / a0
                 p2 = p1; p1 = xin; q2 = q1; q1 = y
                 out[i] = y.toFloat()
             }
         }
+        fun coef(hz: Double, q: Double) = (2 * PI * hz / rate).let { w -> Triple(sin(w) / (2 * q), cos(w), w) }
+        coef(SUB_HZ, 0.707).let { (al, cw) -> pass((1 + cw) / 2, -(1 + cw), (1 + cw) / 2, 1 + al, -2 * cw, 1 - al) }
+        coef(MID_HZ, 0.7).let { (al, cw) ->
+            val a = Math.pow(10.0, MID_DB / 40)
+            pass(1 + al * a, -2 * cw, 1 - al * a, 1 + al / a, -2 * cw, 1 - al / a)
+        }
+        coef(SMOOTH_HZ, 0.707).let { (al, cw) -> pass((1 - cw) / 2, 1 - cw, (1 - cw) / 2, 1 + al, -2 * cw, 1 - al) }
         // It felt late: its swell starts 76 dB down and is inaudible for most of the rise. Drop
         // what lies more than LEAD_DB under the peak, so it sounds at once, at the same speed.
         val quiet = 20 * kotlin.math.log10(0.0001 / 0.6)           // -75.6 dB

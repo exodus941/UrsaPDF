@@ -65,17 +65,14 @@ class PieMenu(
         const val GLOW_STOPS = 16
         /** The yellow selector's and the name pill's fade, in and out, linear: 125 ms. */
         const val SEL_MS = 125f
-        /** The shadow: the light's height over the screen's middle, the disc's over the page (dp), its darkness and blur. */
-        const val SHADOW_LIGHT = 450f
-        const val SHADOW_PIN = 24f
-        const val SHADOW_DARK = 0.5f
-        const val SHADOW_BLUR = 14f
-        /** How much of the disc's tilt moves its shadow: a quarter, about 10 dp of lift at the rim. */
-        const val SHADOW_TILT = 0.25f
-        /** The light sits this far (dp) above the screen's middle, so even a centred disc casts its shadow about 4.5 dp down. */
-        const val SHADOW_UP = 80f
-        /** The disc's camera: cameraDistance 8000 dp over densityDpi, at 72 px an inch. */
-        const val CAMERA_PX = 8000f / 160f * 72f
+        /** The shadow's soft outer part: darkness and blur (dp); it stays centred under the disc. */
+        const val PENUMBRA_DARK = 0.35f
+        const val PENUMBRA_BLUR = 14f
+        /** Its darker core: darkness, blur (dp), radius against the disc's, and how far (dp) it slides toward a press. */
+        const val UMBRA_DARK = 0.3f
+        const val UMBRA_BLUR = 5f
+        const val UMBRA_SIZE = 0.96f
+        const val UMBRA_SHIFT = 10f
 
         /** 0 below the start, 1 at and past the top, linear between. */
         fun ramp(v: Double, start: Double, top: Double) = ((v - start) / (top - start)).coerceIn(0.0, 1.0)
@@ -161,31 +158,29 @@ class PieMenu(
         addUpdateListener { grow = it.animatedValue as Float; invalidate(); shade.invalidate() }
     }
 
-    // The disc's shadow on the page, cast by one light SHADOW_LIGHT dp above the middle of
-    // the screen while the disc rests SHADOW_PIN dp above the page. A tilted disc and the
-    // page are two planes, so the light maps one onto the other exactly by a perspective
-    // transform: four rim points, lifted and tilted as the disc is, projected onto the page,
-    // place a ready-blurred round shadow. It falls away from the screen's middle, further
-    // toward the edges, and stretches with the tilt. Multiplied over the page, so its
-    // strength is a grey (white leaves the page as it is); it fades by easing that grey to white.
-    private val shadowBmp: android.graphics.Bitmap by lazy {
-        val b = a.dp(SHADOW_BLUR) * 2; val s = (2 * (outerR + b)).toInt()
-        android.graphics.Bitmap.createBitmap(s, s, android.graphics.Bitmap.Config.ARGB_8888).also { bm ->
+    // The disc's shadow on the page, the same wherever the pie opens. Two layers, both
+    // multiplied over the page (a grey; white leaves it as it is), both centred on the disc
+    // at rest: a soft, wide penumbra that stays put, and a darker, tighter umbra that slides
+    // toward the pressed edge, up to UMBRA_SHIFT dp, so it shows just past the rim there, as
+    // under a disc tipped down on that side. Each fades by easing its grey to white.
+    private fun shadowDisc(dark: Float, blurDp: Float, r: Float): android.graphics.Bitmap {
+        val b = a.dp(blurDp) * 2; val s = (2 * (r + b)).toInt()
+        return android.graphics.Bitmap.createBitmap(s, s, android.graphics.Bitmap.Config.ARGB_8888).also { bm ->
             val c = Canvas(bm)
             c.drawColor(android.graphics.Color.WHITE)
-            val g = (255 * (1 - SHADOW_DARK)).toInt()
-            c.drawCircle(s / 2f, s / 2f, outerR, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            val g = (255 * (1 - dark)).toInt()
+            c.drawCircle(s / 2f, s / 2f, r, Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = android.graphics.Color.rgb(g, g, g)
-                maskFilter = android.graphics.BlurMaskFilter(a.dp(SHADOW_BLUR), android.graphics.BlurMaskFilter.Blur.NORMAL)
+                maskFilter = android.graphics.BlurMaskFilter(a.dp(blurDp), android.graphics.BlurMaskFilter.Blur.NORMAL)
             })
         }
     }
+    private val penumbra by lazy { shadowDisc(PENUMBRA_DARK, PENUMBRA_BLUR, outerR) }
+    private val umbra by lazy { shadowDisc(UMBRA_DARK, UMBRA_BLUR, outerR * UMBRA_SIZE) }
     private val shadowPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG).apply {
         xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.MULTIPLY)
     }
     private val shadowMap = android.graphics.Matrix()
-    private val shadowSrc = FloatArray(8)
-    private val shadowDst = FloatArray(8)
     private val fadeM = android.graphics.ColorMatrix()
 
     private val shade = object : View(a) {
@@ -193,53 +188,21 @@ class PieMenu(
         override fun onDraw(c: Canvas) {
             val k = grow * alphaNow()
             if (k <= 0f) return
-            val lx = width / 2f; val ly = height / 2f - a.dp(SHADOW_UP); val lz = a.dp(SHADOW_LIGHT); val pin = a.dp(SHADOW_PIN)
-            // The disc's tilt, as the view's rotation sets it: the pressed side dips by up to TILT.
-            val dx = (fx - cx).takeIf { touched } ?: 0f; val dy = (fy - cy).takeIf { touched } ?: 0f
-            val d = hypot(dx, dy)
-            val ang = Math.toRadians((min(1f, d / outerR) * TILT).toDouble())
-            val ux = if (d > 1f) dx / d else 0f; val uy = if (d > 1f) dy / d else 0f
-            val kx = -uy; val ky = ux; val co = cos(ang).toFloat(); val si = sin(ang).toFloat(); val t = 1 - co
-            val half = shadowBmp.width / 2f
-            val r = outerR * grow
-            for (i in 0 until 4) {
-                val px = if (i % 2 == 0) (if (i == 0) r else -r) else 0f
-                val py = if (i % 2 == 1) (if (i == 1) r else -r) else 0f
-                // Rodrigues' rotation about (kx, ky, 0).
-                val x = (t * kx * kx + co) * px + t * kx * ky * py
-                val y = t * kx * ky * px + (t * ky * ky + co) * py
-                // The drawn tilt looks slight from the view's far camera; at its full 20 degrees the rim
-                // would rise 41 dp and swing the shadow far past what the eye sees, so it lifts SHADOW_TILT of that.
-                val z = (-ky * si * px + kx * si * py) * SHADOW_TILT
-                // Cast from the disc as drawn: the view's camera draws the side tilted away
-                // smaller, so the shadow follows that rim and tucks under it on the pressed side,
-                // rather than showing past it as a squashed band. Android puts that camera
-                // cameraDistance / densityDpi inches away at 72 px an inch: 3600 px here.
-                val pz = CAMERA_PX / (CAMERA_PX - z)
-                val wx = cx + x * pz; val wy = cy + y * pz; val wz = pin + z
-                val f = lz / (lz - wz)
-                shadowDst[2 * i] = lx + (wx - lx) * f; shadowDst[2 * i + 1] = ly + (wy - ly) * f
-                shadowSrc[2 * i] = half + px / grow; shadowSrc[2 * i + 1] = half + py / grow
-            }
-            // An even ellipse through the four projected points: centre midway between opposite
-            // rim points, axes half their spans. Mapping all four exactly squeezed the blur on
-            // the low side into a hard, squashed band; this keeps the edge equally soft all round
-            // and lets the shadow slide under the disc on the pressed side.
-            val ex = (shadowDst[0] + shadowDst[4]) / 2; val ey = (shadowDst[1] + shadowDst[5]) / 2
-            val fx0 = (shadowDst[0] - shadowDst[4]) / 2; val fy0 = (shadowDst[1] - shadowDst[5]) / 2
-            val fx1 = (shadowDst[2] - shadowDst[6]) / 2; val fy1 = (shadowDst[3] - shadowDst[7]) / 2
-            shadowDst[0] = ex; shadowDst[1] = ey
-            shadowDst[2] = ex + fx0; shadowDst[3] = ey + fy0
-            shadowDst[4] = ex + fx1; shadowDst[5] = ey + fy1
-            shadowSrc[0] = half; shadowSrc[1] = half
-            shadowSrc[2] = half + outerR; shadowSrc[3] = half
-            shadowSrc[4] = half; shadowSrc[5] = half + outerR
-            shadowMap.setPolyToPoly(shadowSrc, 0, shadowDst, 0, 3)
-            // Fading: the grey eases to white, which multiplies to nothing.
-            val s = k; val o = 255 * (1 - s)
-            fadeM.set(floatArrayOf(s, 0f, 0f, 0f, o, 0f, s, 0f, 0f, o, 0f, 0f, s, 0f, o, 0f, 0f, 0f, 1f, 0f))
+            val o = 255 * (1 - k)
+            fadeM.set(floatArrayOf(k, 0f, 0f, 0f, o, 0f, k, 0f, 0f, o, 0f, 0f, k, 0f, o, 0f, 0f, 0f, 1f, 0f))
             shadowPaint.colorFilter = android.graphics.ColorMatrixColorFilter(fadeM)
-            c.drawBitmap(shadowBmp, shadowMap, shadowPaint)
+            // Grows with the disc, about the same point.
+            fun place(bm: android.graphics.Bitmap, x: Float, y: Float) {
+                shadowMap.setTranslate(-bm.width / 2f, -bm.height / 2f)
+                shadowMap.postScale(grow, grow)
+                shadowMap.postTranslate(x, y)
+                c.drawBitmap(bm, shadowMap, shadowPaint)
+            }
+            place(penumbra, cx, cy)
+            val dx = if (touched) fx - cx else 0f; val dy = if (touched) fy - cy else 0f
+            val d = hypot(dx, dy)
+            val s = if (d > 1f) a.dp(UMBRA_SHIFT) * min(1f, d / outerR) / d else 0f
+            place(umbra, cx + dx * s, cy + dy * s)
         }
     }
     private fun alphaNow() = alpha

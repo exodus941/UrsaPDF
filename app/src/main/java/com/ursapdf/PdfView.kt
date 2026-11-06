@@ -155,11 +155,20 @@ class PdfView(ctx: Context) : View(ctx) {
     /** Where the current page sits on screen. */
     fun pageRect() = RectF(left() + shift, pageY(currentPage), left() + shift + pageW(), pageY(currentPage) + pageH())
 
-    /** page, pan y fraction, pan x fraction. Continuous: y is how far down the page the screen's top is. */
+    /** A turn still moving lands now, so what is saved is the page it was going to. */
+    fun settle() {
+        turnAnim?.let { if (it.isRunning) it.end() }
+    }
+
+    /**
+     * page, pan y fraction, pan x fraction. Continuous: y is how far down the page the screen's
+     * top is. It goes below 0 when the screen's top is on the page before: the current page is
+     * the one under the middle, and clamping there reopened the file further on than it was left.
+     */
     fun position(): FloatArray {
         val w = pageW(); val h = pageH()
         if (continuous && pos.isNotEmpty()) {
-            val f = ((sy / zoom - pos[currentPage]) / dh[currentPage]).coerceIn(0f, 1f)
+            val f = (sy / zoom - pos[currentPage]) / dh[currentPage]
             return floatArrayOf(currentPage.toFloat(), f, if (w > width) sx / w else 0f)
         }
         return floatArrayOf(currentPage.toFloat(), if (h > height) sy / h else 0f, if (w > width) sx / w else 0f)

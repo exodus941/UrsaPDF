@@ -18,11 +18,12 @@ class DocState(val uri: String, var name: String) {
     var opened = 0L
     val bookmarks = sortedMapOf<Int, String>()  // page index to name; "" means unnamed
     var lock = 0f     // zoom lock: the locked zoom, 0 when off
+    var continuous = false  // every page in one vertical stack
 }
 
 /**
  * The recents list, under "docs". A file that leaves the list (removed, or pushed past
- * [MAX]) keeps its crop, bookmarks and zoom lock under "kept" until the app is
+ * [MAX]) keeps its crop, bookmarks, zoom lock and Continuous Mode under "kept" until the app is
  * uninstalled; opening it again brings them back.
  */
 object Store {
@@ -46,6 +47,7 @@ object Store {
         // 1.5.11 stored bare page numbers; later versions store {p, n}.
         j.optJSONArray("bm")?.let { a -> for (k in 0 until a.length()) a.optJSONObject(k)?.let { o -> bookmarks[o.getInt("p")] = o.optString("n") } ?: run { bookmarks[a.getInt(k)] = "" } }
         lock = j.optDouble("lk", 0.0).toFloat()
+        continuous = j.optBoolean("ct", false)
     }
 
     private fun json(d: DocState) = JSONObject().apply {
@@ -57,6 +59,7 @@ object Store {
         put("ts", d.opened)
         if (d.bookmarks.isNotEmpty()) put("bm", JSONArray().apply { for ((p, n) in d.bookmarks) put(JSONObject().put("p", p).put("n", n)) })
         if (d.lock > 0f) put("lk", d.lock.toDouble())
+        if (d.continuous) put("ct", true)
     }
 
     private fun list(c: Context, key: String): MutableList<DocState> {
@@ -105,7 +108,7 @@ object Store {
         list[i] = DocState(newUri, newName).also { d ->
             d.page = o.page; d.offset = o.offset; d.x = o.x; d.zoom = o.zoom; d.invert = o.invert
             d.pages = o.pages; d.size = o.size; d.crop.set(o.crop); d.opened = o.opened; d.bookmarks.putAll(o.bookmarks)
-            d.lock = o.lock
+            d.lock = o.lock; d.continuous = o.continuous
         }
         write(c, list)
     }
@@ -117,11 +120,11 @@ object Store {
         write(c, list)
     }
 
-    private fun hasKeep(d: DocState) = d.bookmarks.isNotEmpty() || d.lock > 0f || d.crop != RectF(0f, 0f, 1f, 1f)
+    private fun hasKeep(d: DocState) = d.bookmarks.isNotEmpty() || d.lock > 0f || d.continuous || d.crop != RectF(0f, 0f, 1f, 1f)
 
     /**
      * The list, at most [MAX]; [dropped] and any entry past [MAX] move to "kept" when they
-     * hold a crop, bookmarks or a lock. An entry back in the list leaves "kept".
+     * hold a crop, bookmarks, a lock or Continuous Mode. An entry back in the list leaves "kept".
      */
     private fun write(c: Context, list: List<DocState>, dropped: List<DocState> = emptyList()) {
         val shown = list.take(MAX)

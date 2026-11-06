@@ -112,7 +112,6 @@ class ReaderActivity : Activity(), PdfView.Listener {
     private fun buildUi() {
         root = FrameLayout(this)
         pdf = PdfView(this).also { it.listener = this }
-        pdf.pageTurn = pageTurn; pdf.continuous = continuousMode
         root.addView(pdf, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         spinner = ProgressBar(this).also {
             root.addView(it, FrameLayout.LayoutParams(dpi(48), dpi(48), Gravity.CENTER))
@@ -236,6 +235,8 @@ class ReaderActivity : Activity(), PdfView.Listener {
         e.invert = if (s.invert) 1f else 0f
         titleView.text = s.name
         pdf.lockZoom = s.lock
+        pdf.continuous = s.continuous
+        pdf.pageTurn = pageTurn && !s.continuous
         pdf.setDocument(e, s.page.coerceIn(0, e.pageCount - 1), s.offset, s.x, if (s.lock > 0f) s.lock else s.zoom)
 
         val st = ThumbStrip(this, e) { pdf.jumpTo(it) }.apply {
@@ -419,10 +420,13 @@ class ReaderActivity : Activity(), PdfView.Listener {
             Menu.Row("Invert Colours", mark = { toggle(state?.invert == true) }, stay = true) { toggleInvert() },
             Menu.Row("Dark Mode", mark = { toggle(!Theme.light) }, stay = true) { Theme.toggle(this) },
             Menu.Row("Zoom Lock", mark = { toggle(pdf.lockZoom > 0f) }, stay = true) { toggleLock() },
+            Menu.Row("Continuous Mode", mark = { toggle(state?.continuous == true) }, stay = true) { setContinuous(state?.continuous != true) },
             Menu.Row("Left-Handed Pie", mark = { toggle(leftPie) }, stay = true) { leftPie = !leftPie },
-            // Only one of these two at a time: turning either on turns the other off.
-            Menu.Row("Page Turn", mark = { toggle(pageTurn) }, stay = true) { pageTurn = !pageTurn; if (pageTurn) continuousMode = false },
-            Menu.Row("Continuous Mode", mark = { toggle(continuousMode) }, stay = true) { continuousMode = !continuousMode; if (continuousMode) pageTurn = false },
+            // Only one of Page Turn and Continuous Mode at a time. Page Turn is for every file, so
+            // a continuous file only sets it aside; turning it on there ends that file's stack.
+            Menu.Row("Page Turn", mark = { toggle(pageTurn && state?.continuous != true) }, stay = true) {
+                if (state?.continuous == true) { pageTurn = true; setContinuous(false) } else pageTurn = !pageTurn
+            },
         ))
     }
 
@@ -462,17 +466,19 @@ class ReaderActivity : Activity(), PdfView.Listener {
         get() = getSharedPreferences("ursa", MODE_PRIVATE).getBoolean("pageTurn", false)
         set(v) { getSharedPreferences("ursa", MODE_PRIVATE).edit().putBoolean("pageTurn", v).apply(); pdf.pageTurn = v }
 
-    /** All pages in one vertical stack; off by default, for every file. */
-    private var continuousMode: Boolean
-        get() = getSharedPreferences("ursa", MODE_PRIVATE).getBoolean("continuous", false)
-        set(v) { getSharedPreferences("ursa", MODE_PRIVATE).edit().putBoolean("continuous", v).apply()
-            if (pdf.continuous == v) return
-            // The layout changes under a 250 ms fade: out, switch, back in.
-            pdf.animate().alpha(0f).setDuration(Motion.MS / 2).setInterpolator(Motion.FADE).withEndAction {
-                pdf.continuous = v
-                pdf.animate().alpha(1f).setDuration(Motion.MS / 2).setInterpolator(Motion.FADE).start()
-            }.start()
-        }
+    /** All pages in one vertical stack; off by default, for this file. */
+    private fun setContinuous(v: Boolean) {
+        val s = state ?: return
+        s.continuous = v
+        pdf.pageTurn = pageTurn && !v
+        save()
+        if (pdf.continuous == v) return
+        // The layout changes under a 250 ms fade: out, switch, back in.
+        pdf.animate().alpha(0f).setDuration(Motion.MS / 2).setInterpolator(Motion.FADE).withEndAction {
+            pdf.continuous = v
+            pdf.animate().alpha(1f).setDuration(Motion.MS / 2).setInterpolator(Motion.FADE).start()
+        }.start()
+    }
 
     /** A page held still for 250 ms. The chrome and any search slide away as the pie opens. */
     override fun onLongPress(x: Float, y: Float) {
@@ -686,6 +692,7 @@ class ReaderActivity : Activity(), PdfView.Listener {
     override fun onPause() {
         super.onPause()
         Updater.paused(this)
+        pdf.settle()
         save()
     }
 
